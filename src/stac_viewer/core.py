@@ -7,11 +7,10 @@ Usage (Jupyter / JupyterLab / VS Code / Colab)::
     cat = browse("https://earth-search.aws.element84.com/v1")  # API URL, catalog.json path/URL or pystac object
     cat                                   # overview table of collections
     cat.sentinel_2_l2a                    # HTML viewer: map, temporal bar, metadata
-    cat.sentinel_2_l2a.selector()         # interactive bbox + date picker (needs anywidget)
-    items = cat.sentinel_2_l2a.search()   # search using the current selection -> Items
+    sel = cat.sentinel_2_l2a.selector()   # interactive bbox + date picker (needs anywidget); show it with `sel`
+    items = cat.sentinel_2_l2a.search(sel)  # search using the selection -> Items
     items = cat.sentinel_2_l2a.search(bbox=[8.4, 47.3, 8.7, 47.5], datetime="2026-06-01/2026-06-30", max_items=50)
     items                                 # HTML: count, map of item footprints, first rows
-    cat.sentinel_2_l2a.clear_selection()  # search() stops using the selector
 
     browse(url, modifier=planetary_computer.sign_inplace)  # extra kwargs go to pystac_client.Client.open
 
@@ -245,7 +244,7 @@ def _desc_html(text: str | None, n: int = 300) -> str:
 # ------------------------------------------------------------------ Leaflet maps
 _TILE_BASE = "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}"
 _TILE_LABELS = "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Reference/MapServer/tile/{z}/{y}/{x}"
-_TILE_ATTR = "Tiles &copy; Esri &mdash; Esri, HERE, Garmin, &copy; OpenStreetMap contributors"
+_TILE_ATTR = "&copy; Esri, OSM"
 _LEAFLET_JS = f"const TILE_BASE = {json.dumps(_TILE_BASE)}, TILE_LABELS = {json.dumps(_TILE_LABELS)}, TILE_ATTR = {json.dumps(_TILE_ATTR)}, TILE_MAX = 16;\n" + """
 const LEAF = "https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/";
 async function leaflet() {  // CSS link once per page; dynamic import avoids RequireJS clashes
@@ -254,10 +253,17 @@ async function leaflet() {  // CSS link once per page; dynamic import avoids Req
     l.id = "stacmap-css"; l.rel = "stylesheet"; l.href = LEAF + "leaflet.css";
     await new Promise(r => { l.onload = l.onerror = r; document.head.append(l); });
   }
+  if (!document.getElementById("stacmap-style")) {  // small attribution
+    const st = document.createElement("style");
+    st.id = "stacmap-style";
+    st.textContent = ".leaflet-container .leaflet-control-attribution{font-size:9px;line-height:1.2;padding:0 4px;background:rgba(255,255,255,.6)}";
+    document.head.append(st);
+  }
   return import(LEAF + "leaflet-src.esm.js");
 }
 function basemap(L, el) {
   const map = L.map(el, { scrollWheelZoom: false, worldCopyJump: true, maxZoom: TILE_MAX });
+  map.attributionControl.setPrefix(false);
   L.tileLayer(TILE_BASE, { maxZoom: TILE_MAX, attribution: TILE_ATTR }).addTo(map);
   L.tileLayer(TILE_LABELS, { maxZoom: TILE_MAX }).addTo(map);  // labels on top of the base
   return map;
@@ -316,6 +322,7 @@ def _map_html(data: dict, fallback_svg: str) -> str:
 # ------------------------------------------------------------ interactive selector
 _ESM = _LEAFLET_JS + """
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const DAY = 864e5, ms = s => Date.parse(s), ymd = t => new Date(t).toISOString().slice(0, 10);  // UTC day strings
 const rb = b => [[b[1], b[0]], [b[3], b[2]]];  // [w, s, e, n] -> Leaflet bounds
 
 async function render({ model, el }) {
@@ -329,26 +336,57 @@ async function render({ model, el }) {
     <div class="stacsel-row">
       <label>Start<input type="date" class="d0"></label>
       <label>End<input type="date" class="d1"></label>
+      <span class="stacsel-span"></span>
+    </div>
+    <div class="stacsel-sl"><div class="stacsel-fill"></div><input type="range" class="r0" min="0" step="1"><input type="range" class="r1" min="0" step="1"></div>
+    <div class="stacsel-tk"><span class="t0"></span><span class="t1"></span></div>
+    <div class="stacsel-pre">
+      <button type="button" class="stacsel-draw sm" data-n="7">Last 7d</button>
+      <button type="button" class="stacsel-draw sm" data-n="30">30d</button>
+      <button type="button" class="stacsel-draw sm" data-n="365">1y</button>
+      <button type="button" class="stacsel-draw sm" data-n="0">All</button>
     </div>
     <div class="stacsel-err"></div>
     <pre class="stacsel-code"></pre>`;
   const err = el.querySelector(".stacsel-err"), btn = el.querySelector(".stacsel-draw");
-  const d0 = el.querySelector(".d0"), d1 = el.querySelector(".d1");
+  const d0 = el.querySelector(".d0"), d1 = el.querySelector(".d1"), r0 = el.querySelector(".r0"), r1 = el.querySelector(".r1");
+  const fill = el.querySelector(".stacsel-fill"), span = el.querySelector(".stacsel-span");
+  const axis = () => {  // slider axis: min_date (or 1980) .. max_date (or today), in days
+    const mn = model.get("min_date") || "1980-01-01", mx = model.get("max_date") || ymd(Date.now());
+    return [mn, mx, Math.max((ms(mx) - ms(mn)) / DAY, 1)];
+  };
   const code = el.querySelector(".stacsel-code"), mapEl = el.querySelector(".stacsel-map");
   let ext, sel;  // rectangles, created once the map is up
   function draw() {
     const b = model.get("bbox");
     if (sel) { ext.setBounds(rb(model.get("extent"))); sel.setBounds(rb(b)); }
     d0.value = model.get("start"); d1.value = model.get("end");
-    d0.min = d1.min = model.get("min_date") || "";
+    const [mn, mx, n] = axis();
+    d0.min = mn; d0.max = d1.value || mx; d1.min = d0.value || mn; d1.max = mx;
     const bad = d0.value && d1.value && d0.value > d1.value;
     err.textContent = bad ? "Start must be before end" : "";
+    const day = (v, dflt) => v ? clamp((ms(v) - ms(mn)) / DAY, 0, n) : dflt;
+    r0.max = r1.max = n; r0.value = day(d0.value, 0); r1.value = day(d1.value, n);
+    r0.style.zIndex = +r0.value > n / 2 ? 3 : 1;  // keep the handle with room to move on top
+    const a = r0.value / n, c = Math.max(r1.value / n, a);
+    fill.style.left = `calc(7px + (100% - 14px) * ${a})`; fill.style.width = `calc((100% - 14px) * ${c - a})`;
+    el.querySelector(".t0").textContent = mn; el.querySelector(".t1").textContent = mx;
+    const days = d0.value && d1.value && !bad ? (ms(d1.value) - ms(d0.value)) / DAY + 1 : 0;
+    span.textContent = days ? `${days} day${days > 1 ? "s" : ""}` : "";
     code.textContent = `search(\\n  bbox=[${b.map(v => v.toFixed(2)).join(", ")}],\\n  datetime="${d0.value}/${d1.value}",\\n)`;
   }
   const setDate = (k, v) => { model.set(k, v); model.save_changes(); draw(); };
   d0.addEventListener("change", () => setDate("start", d0.value));
   d1.addEventListener("change", () => setDate("end", d1.value));
-  model.on("change:bbox", draw); model.on("change:start", draw); model.on("change:end", draw);
+  const setRange = (a, b) => { model.set("start", a); model.set("end", b); model.save_changes(); draw(); };
+  const day = v => ymd(ms(axis()[0]) + v * DAY);
+  r0.addEventListener("input", () => setDate("start", day(Math.min(+r0.value, +r1.value))));
+  r1.addEventListener("input", () => setDate("end", day(Math.max(+r0.value, +r1.value))));
+  el.querySelectorAll(".stacsel-pre button").forEach(b => b.addEventListener("click", () => {
+    const [mn, mx] = axis(), n = +b.dataset.n;
+    n ? setRange(ymd(Math.max(ms(mx) - n * DAY, ms(mn))), mx) : setRange(model.get("min_date"), mx);
+  }));
+  model.on("change:bbox", draw); model.on("change:start", draw); model.on("change:end", draw); model.on("change:max_date", draw); model.on("change:min_date", draw);
   draw();
 
   const L = await leaflet();
@@ -396,6 +434,22 @@ _WIDGET_CSS = """
 .stacsel-map{height:300px;border:1px solid rgba(128,128,128,.4);border-radius:4px}
 .stacsel-row{display:flex;gap:8px;margin-top:8px}
 .stacsel-row label{flex:1;display:flex;flex-direction:column;font-size:12px;opacity:.85;gap:2px}
+.stacsel-row .stacsel-span{flex:0 0 auto;align-self:flex-end;font-size:12px;opacity:.7;min-width:56px;text-align:right}
+.stacsel-sl{position:relative;height:20px;margin-top:6px}
+.stacsel-sl::before{content:"";position:absolute;left:7px;right:7px;top:8px;height:4px;border-radius:2px;background:rgba(128,128,128,.3)}
+.stacsel-fill{position:absolute;top:8px;height:4px;border-radius:2px;background:#3b82f6}
+.stacsel-sl input{position:absolute;left:0;top:0;width:100%;height:20px;margin:0;padding:0;background:none;
+  pointer-events:none;-webkit-appearance:none;appearance:none}
+.stacsel-sl input::-webkit-slider-runnable-track{height:20px;background:none}
+.stacsel-sl input::-moz-range-track{height:20px;background:none}
+.stacsel-sl input::-webkit-slider-thumb{-webkit-appearance:none;pointer-events:auto;box-sizing:border-box;width:14px;height:14px;
+  margin-top:3px;border-radius:50%;background:#3b82f6;border:2px solid #fff;box-shadow:0 0 0 1px #1d4ed8;cursor:pointer}
+.stacsel-sl input::-moz-range-thumb{pointer-events:auto;box-sizing:border-box;width:14px;height:14px;
+  border-radius:50%;background:#3b82f6;border:2px solid #fff;box-shadow:0 0 0 1px #1d4ed8;cursor:pointer}
+.stacsel-tk{display:flex;justify-content:space-between;font-size:11px;opacity:.6}
+.stacsel-pre{display:flex;gap:6px;margin-top:6px}
+.stacsel-draw.sm{font-size:11px;padding:1px 8px}
+.stacsel .leaflet-container .leaflet-control-attribution{font-size:9px;line-height:1.2;padding:0 4px;background:rgba(255,255,255,.6)}
 .stacsel-err{color:#dc2626;font-size:12px;min-height:14px;margin-top:4px}
 .stacsel-code{margin:6px 0 0;padding:6px 8px;background:rgba(128,128,128,.12);border-radius:6px;
   font-family:var(--jp-code-font-family,monospace);font-size:11.5px;white-space:pre-wrap}
@@ -413,6 +467,7 @@ if anywidget is not None:
         end = traitlets.Unicode("").tag(sync=True)
         extent = traitlets.List(traitlets.Float(), default_value=[-180.0, -90.0, 180.0, 90.0]).tag(sync=True)
         min_date = traitlets.Unicode("").tag(sync=True)
+        max_date = traitlets.Unicode("").tag(sync=True)
 
 else:
     SearchSelector = None  # type: ignore[assignment,misc]
@@ -462,10 +517,9 @@ class CollectionView:
     def __init__(self, collection: pystac.Collection, catalog: Any):
         self._col = collection
         self._catalog = catalog
-        self._selector = None
 
     def __getattr__(self, name: str):
-        if name.startswith("__") or name in {"_col", "_catalog", "_selector"}:
+        if name.startswith("__") or name in {"_col", "_catalog"}:
             raise AttributeError(name)
         return getattr(self._col, name)
 
@@ -515,30 +569,24 @@ class CollectionView:
 
     # ---- selector + search
     def selector(self):
-        """Show an interactive bbox/date picker; ``search()`` then uses its values."""
+        """Return an interactive bbox/date picker (show it, then pass it to ``search(sel)``)."""
         if SearchSelector is None:
             raise ImportError("selector() needs anywidget: pip install anywidget")
         bbox, start, end = _extent_defaults(self._col)
-        self._selector = SearchSelector(bbox=bbox, extent=bbox, start=start, end=end, min_date=start)
-        return self._selector
+        return SearchSelector(bbox=bbox, extent=bbox, start=start, end=end, min_date=start, max_date=end)
 
-    def clear_selection(self) -> None:
-        """Drop the selector so ``search()`` stops using it."""
-        self._selector = None
-
-    def search(self, *, bbox=None, datetime=None, ids=None, max_items=1000, **kwargs) -> Items:
-        """Search this collection. Explicit arguments win over the selector's values.
+    def search(self, selector=None, *, bbox=None, datetime=None, ids=None, max_items=1000, **kwargs) -> Items:
+        """Search this collection. ``selector`` (from ``selector()``) supplies bbox/datetime; explicit arguments win.
 
         STAC APIs: server-side search (extra kwargs go to ``pystac_client``). Static catalogs:
         client-side bbox/datetime/ids filtering only. ``datetime`` takes 'a/b', 'a', '../b',
         datetime/date objects, or a (start, end) tuple. ``max_items=None`` means no limit.
         """
-        sel = self._selector
-        if sel is not None:
+        if selector is not None:
             if bbox is None:
-                bbox = list(sel.bbox)
-            if datetime is None and (sel.start or sel.end):
-                datetime = f"{sel.start or '..'}/{sel.end or '..'}"
+                bbox = list(selector.bbox)
+            if datetime is None and (selector.start or selector.end):
+                datetime = f"{selector.start or '..'}/{selector.end or '..'}"
         cat = self._catalog
         if isinstance(cat, Client) and cat.conforms_to(ConformanceClasses.ITEM_SEARCH):
             t0, t1 = _dt_range(datetime)
