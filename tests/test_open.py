@@ -117,6 +117,16 @@ def test_csv(tmp_path):
     assert list(tsv.open().columns) == ["a", "b"] and openers.opener_params("csv", list(tsv), ["d"])["x"]["default"] is None
 
 
+def test_csv_separators(tmp_path):
+    for sep, name in [(";", "semi.csv"), (",", "comma.csv"), ("|", "pipe.csv")]:
+        pd.DataFrame({"a": ["x,y", "z"], "b": [1, 2]}).to_csv(tmp_path / name, sep=sep, index=False)
+        it = Items([item_with("s", D(2020), d=(str(tmp_path / name), "text/csv"))])
+        assert openers.opener_params("csv", list(it), ["d"])["sep"]["default"] == sep
+        df = it.open()
+        assert list(df.columns) == ["a", "b"] and list(df.a) == ["x,y", "z"]
+    assert list(it.open(sep=",").columns) == ["a|b"]  # explicit sep wins
+
+
 def test_opener_override_and_user_registration():
     it = item_with("a", D(2020), d=("x.nc", "application/x-netcdf"))
     calls = []

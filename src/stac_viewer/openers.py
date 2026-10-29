@@ -337,10 +337,21 @@ def _open_filegdb(items, assets, **kwargs):
 _CSV_X, _CSV_Y = ("lon", "longitude", "lng", "long", "x", "easting"), ("lat", "latitude", "y", "northing")
 
 
+_CSV_SEPS = (",", ";", "\t", "|")
+
+
+def _csv_sniff(href: str) -> str:
+    """Separator occurring most often in the header line (``,`` if none does)."""
+    pd = _need("pandas", "csv")
+    head = pd.read_csv(href, sep="\x01", header=None, nrows=1, quoting=3, dtype=str).iat[0, 0]  # whole first line
+    n = {s: str(head).count(s) for s in _CSV_SEPS}
+    return max(n, key=n.get) if any(n.values()) else ","
+
+
 def _csv_read(href: str, **kwargs):
     pd = _need("pandas", "csv")
-    if _ext(href.removesuffix(".gz")) == ".tsv":
-        kwargs.setdefault("sep", "\t")
+    if kwargs.get("sep") is None:
+        kwargs["sep"] = _csv_sniff(href)
     return pd.read_csv(href, **kwargs)
 
 
@@ -362,6 +373,7 @@ def _csv_coord(names):
     media_types=["text/csv", "application/csv", "text/tab-separated-values"],
     extensions=[".csv", ".csv.gz", ".tsv", ".tsv.gz"],
     params={
+        "sep": Param(list(_CSV_SEPS), lambda i, a: _csv_sniff(_pairs(i, a)[0][1].href)),  # not passed: sniffed per file
         "x": Param(_csv_columns, _csv_coord(_CSV_X)),  # x and y set: GeoDataFrame of points
         "y": Param(_csv_columns, _csv_coord(_CSV_Y)),
         "crs": Param(str, lambda i, a: _infer_crs(i, a) or "EPSG:4326"),
