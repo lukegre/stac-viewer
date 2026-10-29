@@ -193,7 +193,8 @@ def _local_search(col: pystac.Collection, bbox=None, datetime=None, ids=None, ma
 # ------------------------------------------------------------------ HTML rendering
 _CSS = """<style>
 .sc{font:13px/1.4 var(--jp-ui-font-family,system-ui,sans-serif);border:1px solid rgba(128,128,128,.4);
- border-radius:8px;padding:10px;max-width:900px;color:inherit}
+ border-radius:8px;padding:10px;max-width:900px;color:var(--vscode-editor-foreground,inherit)}
+.vscode-dark .sc,[data-vscode-theme-kind*=dark] .sc{color-scheme:dark}
 .sc h4{margin:0 0 2px;font-size:15px}.sc .m{opacity:.65}
 .sc details{overflow-x:auto;margin-top:6px;border-top:1px solid rgba(128,128,128,.25);padding-top:6px}
 .sc summary{cursor:pointer;font-weight:600}
@@ -207,7 +208,7 @@ _CSS = """<style>
 .sc .bar>div{position:absolute;top:0;bottom:0;background:#3b82f6;border-radius:4px}
 .sc .nw{white-space:nowrap}
 .sc .row2{margin-top:8px}.sc .row2 .il{margin-top:8px}.sc .il table{width:100%}
-.sc .il{max-height:calc(16 * (1.4em + 2px));overflow:auto}.sc .il th{position:sticky;top:0;z-index:1;background:Canvas;text-align:left;font-weight:600}
+.sc .il{max-height:calc(16 * (1.4em + 2px));overflow:auto}.sc .il th{position:sticky;top:0;z-index:1;background:var(--vscode-editor-background,var(--jp-layout-color0,Canvas));text-align:left;font-weight:600}
 .sc .il td{text-align:left}
 .sc .il tr[data-i]{cursor:pointer}.sc .il tr.hov{background:rgba(59,130,246,.15)}
 .sc .il tr.selected{background:rgba(59,130,246,.3);box-shadow:inset 3px 0 #f97316;font-weight:600}
@@ -611,7 +612,8 @@ export default { render };
 
 _WIDGET_CSS = """
 .stacsel{font:13px/1.4 var(--jp-ui-font-family,system-ui,sans-serif);border:1px solid rgba(128,128,128,.4);
-  border-radius:8px;padding:10px;max-width:640px;color:inherit}
+  border-radius:8px;padding:10px;max-width:640px;color:var(--vscode-editor-foreground,inherit)}
+.vscode-dark .stacsel,[data-vscode-theme-kind*=dark] .stacsel{color-scheme:dark}  /* VS Code's widget host keeps light --jp-* colours */
 .stacsel-bar{display:flex;align-items:center;gap:8px;margin-bottom:6px;flex-wrap:wrap}
 .stacsel-draw{cursor:pointer;font:inherit;padding:2px 10px;border:1px solid rgba(128,128,128,.6);
   border-radius:6px;background:transparent;color:inherit}
