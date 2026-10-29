@@ -235,3 +235,46 @@ def test_items_view_aspect_and_clamp():
     assert (e - w) == pytest.approx(2 * (n - s)) and w < 8 and e > 9 and s < 47 and n > 47.5
     assert core._items_view([[-180, -90, 180, 90]]) == (-180, -90, 180, 90)
     assert core._items_view([[170, 0, -170, 1]]) is None
+
+
+# ---------------------------------------------------------------- description + leaflet maps
+def test_short_description_no_details():
+    col = core.CollectionView(make_collection("short"), None)
+    h = col._repr_html_()
+    assert "desc short" in h and "class='dsc" not in h
+
+
+def test_long_description_expandable():
+    col = make_collection("long")
+    col.description = ("word " * 100).strip() + " <b>end</b>"
+    h = core.CollectionView(col, None)._repr_html_()
+    assert "<details class='dsc" in h and "&hellip; more" in h and "show less" in h
+    assert "&lt;b&gt;end&lt;/b&gt;" in h and "<b>end</b>" not in h  # full text, escaped
+    head = h.split("<span class='dmore'>")[1].split("&hellip;")[0]
+    assert len(head) <= 300 and head.endswith("word")  # cut at a word boundary
+
+
+def test_collection_card_map(cols):
+    h = cols.alpha._repr_html_()
+    assert 'id="stacmap-' in h and "<svg" in h  # fallback inside the container
+    assert "leaflet@1.9.4" in h and "<script>" in h and "type=\"module\"" not in h
+
+
+def test_script_cannot_be_broken_out_of():
+    col = make_collection("x</script>y")
+    col.description = "</script><script>alert(1)</script>"
+    h = core.CollectionView(col, None)._repr_html_()
+    assert h.count("</script>") == 1  # only our own closing tag
+    items = Items([make_item("i</script>d", (0, 0, 1, 1), D(2020))])
+    assert items._repr_html_().count("</script>") == 1
+
+
+def test_items_card_embeds_geometries(cols):
+    h = cols.alpha.search()._repr_html_()
+    assert 'id="stacmap-' in h and "leaflet@1.9.4" in h
+    assert '"type": "Polygon"' in h and "a1 \\u00b7 2020-01-15" in h
+
+
+def test_widget_has_no_land_trait(cols):
+    sel = cols.alpha.selector()
+    assert not sel.has_trait("land") and "leaflet" in sel._esm

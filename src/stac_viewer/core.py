@@ -21,9 +21,11 @@ from __future__ import annotations
 
 import datetime as dt
 import html
+import json
 import keyword
 import math
 import re
+import uuid
 from importlib.resources import files
 from typing import Any, Iterator
 
@@ -141,12 +143,16 @@ def _local_search(col: pystac.Collection, bbox=None, datetime=None, ids=None, ma
 # ------------------------------------------------------------------ HTML rendering
 _CSS = """<style>
 .sc{font:13px/1.4 var(--jp-ui-font-family,system-ui,sans-serif);border:1px solid rgba(128,128,128,.4);
- border-radius:8px;padding:10px;max-width:640px;color:inherit}
+ border-radius:8px;padding:10px;max-width:900px;color:inherit}
 .sc h4{margin:0 0 2px;font-size:15px}.sc .m{opacity:.65}
 .sc details{overflow-x:auto;margin-top:6px;border-top:1px solid rgba(128,128,128,.25);padding-top:6px}
 .sc summary{cursor:pointer;font-weight:600}
 .sc table{border-collapse:collapse}.sc td{padding:1px 10px 1px 0;vertical-align:top}
 .sc .row{display:flex;gap:16px;flex-wrap:wrap;align-items:flex-start;margin-top:8px}
+.sc .mp{flex:1 1 50%;min-width:50%}.sc .info{flex:1 1 40%;min-width:220px}
+.sc .ds{white-space:pre-line}.sc details.dsc{border:0;padding:0;margin:0}
+.sc .dsc>summary{font-weight:400}.sc .dsc[open]>summary .dmore{display:none}
+.sc .dsc>summary .dless{display:none;font-size:11px;opacity:.6}.sc .dsc[open]>summary .dless{display:inline}
 .sc .bar{position:relative;height:8px;background:rgba(128,128,128,.25);border-radius:4px;margin:6px 0 2px}
 .sc .bar>div{position:absolute;top:0;bottom:0;background:#3b82f6;border-radius:4px}
 .sc .nw{white-space:nowrap}
@@ -183,7 +189,7 @@ def _svg_map(bboxes, w: int = 240, h: int = 120, view=None) -> str:
     land = f'<path d="{_LAND}" transform="{move}scale({sx:.4f}, {sy:.4f})" fill="rgba(128,128,128,.28)"/>'
     clip = "" if view is None else ";overflow:hidden"
     return (
-        f'<svg width="{w}" height="{h}" style="border:1px solid rgba(128,128,128,.4){clip}">{land}'
+        f'<svg viewBox="0 0 {w} {h}" width="100%" style="border:1px solid rgba(128,128,128,.4){clip}">{land}'
         f'<g stroke="rgba(128,128,128,.35)" stroke-width="1">{grid}</g>{rects}</svg>'
     )
 
@@ -221,86 +227,173 @@ def _table(d: dict) -> str:
     return f"<table>{rows}</table>"
 
 
-# ------------------------------------------------------------ interactive selector
-_ESM = """
-const W = 240, H = 120;
-const NS = "http://www.w3.org/2000/svg";
-const lon = x => x / W * 360 - 180, lat = y => 90 - y / H * 180;
-const px = v => (v + 180) / 360 * W, py = v => (90 - v) / 180 * H;
-const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+def _desc_html(text: str | None, n: int = 300) -> str:
+    """Description in full if short, else a <details> whose summary is the first ~n chars (word boundary)."""
+    text = (text or "").strip()
+    if len(text) <= n:
+        return f"<div class='m ds'>{html.escape(text)}</div>"
+    head = text[:n]
+    if not text[n].isspace() and len(head.split()) > 1:
+        head = head.rsplit(None, 1)[0]
+    return (
+        f"<details class='dsc ds m'><summary><span class='dmore'>{html.escape(head.rstrip())}&hellip; more</span>"
+        f"<span class='dless'>show less</span></summary>"
+        f"{html.escape(text)}</details>"
+    )
 
-function render({ model, el }) {
+
+# ------------------------------------------------------------------ Leaflet maps
+_TILE_BASE = "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}"
+_TILE_LABELS = "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Reference/MapServer/tile/{z}/{y}/{x}"
+_TILE_ATTR = "Tiles &copy; Esri &mdash; Esri, HERE, Garmin, &copy; OpenStreetMap contributors"
+_LEAFLET_JS = f"const TILE_BASE = {json.dumps(_TILE_BASE)}, TILE_LABELS = {json.dumps(_TILE_LABELS)}, TILE_ATTR = {json.dumps(_TILE_ATTR)}, TILE_MAX = 16;\n" + """
+const LEAF = "https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/";
+async function leaflet() {  // CSS link once per page; dynamic import avoids RequireJS clashes
+  if (!document.getElementById("stacmap-css")) {
+    const l = document.createElement("link");
+    l.id = "stacmap-css"; l.rel = "stylesheet"; l.href = LEAF + "leaflet.css";
+    await new Promise(r => { l.onload = l.onerror = r; document.head.append(l); });
+  }
+  return import(LEAF + "leaflet-src.esm.js");
+}
+function basemap(L, el) {
+  const map = L.map(el, { scrollWheelZoom: false, worldCopyJump: true, maxZoom: TILE_MAX });
+  L.tileLayer(TILE_BASE, { maxZoom: TILE_MAX, attribution: TILE_ATTR }).addTo(map);
+  L.tileLayer(TILE_LABELS, { maxZoom: TILE_MAX }).addTo(map);  // labels on top of the base
+  return map;
+}
+"""
+
+# body of the async IIFE in the static cards; `id` and `data` ({bboxes?, features?}) are defined around it
+_MAP_JS = """
+const el = document.getElementById(id), fallback = el.innerHTML;
+let map, ro;
+try {
+  const L = await leaflet();
+  el.innerHTML = ""; el.style.height = "260px";
+  map = basemap(L, el);
+  const tip = s => { const d = document.createElement("div"); d.textContent = s; return d; };  // no innerHTML
+  const group = L.featureGroup().addTo(map);
+  const style = { color: "#1d4ed8", weight: 1, fillColor: "#3b82f6" };
+  const bboxes = data.bboxes || [];
+  bboxes.forEach((b, i) => {
+    const spans = b[0] <= b[2] ? [[b[0], b[2]]] : [[b[0], 180], [-180, b[2]]];  // antimeridian
+    for (const [a, c] of spans)
+      L.rectangle([[b[1], a], [b[3], c]], { ...style, fillOpacity: i ? 0.2 : 0.35 })
+        .bindTooltip(tip("[" + b.map(v => v.toFixed(2)).join(", ") + "]")).addTo(group);
+  });
+  if (data.features)
+    L.geoJSON(data.features, { style: { ...style, fillOpacity: 0.25 },
+      onEachFeature: (f, l) => l.bindTooltip(tip(f.properties.t)) }).addTo(group);
+  const world = bboxes.some(b => b[2] - b[0] >= 350 && b[3] - b[1] >= 170);
+  let fitted = false;
+  const fit = () => { map.fitBounds(world ? [[-90, -180], [90, 180]] : group.getBounds(), { padding: [12, 12] }); fitted = true; };
+  if (el.clientWidth > 0) fit();  // zero-size (hidden) containers would zoom to max, so wait for a size
+  ro = new ResizeObserver(() => { map.invalidateSize(); if (!fitted && el.clientWidth > 0) fit(); });
+  ro.observe(el);
+} catch (err) {  // keep the SVG fallback
+  if (ro) ro.disconnect();
+  if (map) map.remove();
+  el.innerHTML = fallback; el.style.height = "";
+}
+"""
+
+
+def _json(x) -> str:
+    """JSON safe to embed in a <script> tag."""
+    return json.dumps(x).replace("</", "<\\/").replace("<!--", "<\\!--")
+
+
+def _map_html(data: dict, fallback_svg: str) -> str:
+    """Container holding the SVG fallback, plus a script that swaps in a Leaflet map when JS can run."""
+    uid = f"stacmap-{uuid.uuid4().hex}"
+    return (
+        f'<div id="{uid}">{fallback_svg}</div>'
+        f"<script>(async()=>{{const id={_json(uid)},data={_json(data)};{_LEAFLET_JS}{_MAP_JS}}})()</script>"
+    )
+
+
+# ------------------------------------------------------------ interactive selector
+_ESM = _LEAFLET_JS + """
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const rb = b => [[b[1], b[0]], [b[3], b[2]]];  // [w, s, e, n] -> Leaflet bounds
+
+async function render({ model, el }) {
   el.classList.add("stacsel");
   el.innerHTML = `
-    <svg viewBox="0 0 ${W} ${H}" width="100%" class="stacsel-map"></svg>
-    <div class="stacsel-hint">Drag on the map to set the bbox</div>
+    <div class="stacsel-bar">
+      <button type="button" class="stacsel-draw">Draw bbox</button>
+      <span class="stacsel-hint">Click, then drag on the map to set the bbox</span>
+    </div>
+    <div class="stacsel-map"></div>
     <div class="stacsel-row">
       <label>Start<input type="date" class="d0"></label>
       <label>End<input type="date" class="d1"></label>
     </div>
     <div class="stacsel-err"></div>
     <pre class="stacsel-code"></pre>`;
-  const svg = el.querySelector("svg"), err = el.querySelector(".stacsel-err");
+  const err = el.querySelector(".stacsel-err"), btn = el.querySelector(".stacsel-draw");
   const d0 = el.querySelector(".d0"), d1 = el.querySelector(".d1");
-  const code = el.querySelector(".stacsel-code");
-  const mk = (tag, attrs) => {
-    const n = document.createElementNS(NS, tag);
-    for (const k in attrs) n.setAttribute(k, attrs[k]);
-    return n;
-  };
-  const land = mk("path", { d: model.get("land"), transform: `scale(${W / 360},${H / 180})`, fill: "rgba(128,128,128,.28)" });
-  const grid = mk("g", { stroke: "rgba(128,128,128,.35)", "stroke-width": 0.5 });
-  for (let i = 0; i <= 6; i++) {
-    grid.append(mk("line", { x1: i * 40, y1: 0, x2: i * 40, y2: H }));
-    grid.append(mk("line", { x1: 0, y1: i * 20, x2: W, y2: i * 20 }));
-  }
-  const ext = mk("rect", { fill: "none", stroke: "rgba(128,128,128,.8)", "stroke-dasharray": "3 2" });
-  const sel = mk("rect", { fill: "#3b82f6", "fill-opacity": 0.3, stroke: "#1d4ed8" });
-  svg.append(land, grid, ext, sel);
-
-  function place(r, b) {
-    r.setAttribute("x", px(b[0])); r.setAttribute("y", py(b[3]));
-    r.setAttribute("width", Math.max(px(b[2]) - px(b[0]), 2));
-    r.setAttribute("height", Math.max(py(b[1]) - py(b[3]), 2));
-  }
+  const code = el.querySelector(".stacsel-code"), mapEl = el.querySelector(".stacsel-map");
+  let ext, sel;  // rectangles, created once the map is up
   function draw() {
     const b = model.get("bbox");
-    place(ext, model.get("extent")); place(sel, b);
+    if (sel) { ext.setBounds(rb(model.get("extent"))); sel.setBounds(rb(b)); }
     d0.value = model.get("start"); d1.value = model.get("end");
     d0.min = d1.min = model.get("min_date") || "";
     const bad = d0.value && d1.value && d0.value > d1.value;
     err.textContent = bad ? "Start must be before end" : "";
     code.textContent = `search(\\n  bbox=[${b.map(v => v.toFixed(2)).join(", ")}],\\n  datetime="${d0.value}/${d1.value}",\\n)`;
   }
-
-  let anchor = null;
-  const pt = e => {
-    const r = svg.getBoundingClientRect();
-    return [clamp((e.clientX - r.left) / r.width * W, 0, W), clamp((e.clientY - r.top) / r.height * H, 0, H)];
-  };
-  svg.addEventListener("pointerdown", e => { svg.setPointerCapture(e.pointerId); anchor = pt(e); });
-  svg.addEventListener("pointermove", e => {
-    if (!anchor) return;
-    const p = pt(e);
-    model.set("bbox", [lon(Math.min(anchor[0], p[0])), lat(Math.max(anchor[1], p[1])),
-                       lon(Math.max(anchor[0], p[0])), lat(Math.min(anchor[1], p[1]))]);
-    draw();
-  });
-  svg.addEventListener("pointerup", () => { anchor = null; model.save_changes(); });
   const setDate = (k, v) => { model.set(k, v); model.save_changes(); draw(); };
   d0.addEventListener("change", () => setDate("start", d0.value));
   d1.addEventListener("change", () => setDate("end", d1.value));
   model.on("change:bbox", draw); model.on("change:start", draw); model.on("change:end", draw);
   draw();
+
+  const L = await leaflet();
+  const map = basemap(L, mapEl);
+  const none = { interactive: false };
+  ext = L.rectangle(rb(model.get("extent")), { ...none, color: "#6b7280", weight: 1, dashArray: "4 3", fill: false }).addTo(map);
+  sel = L.rectangle(rb(model.get("bbox")), { ...none, color: "#1d4ed8", weight: 1, fillColor: "#3b82f6", fillOpacity: 0.3 }).addTo(map);
+  let fitted = false;
+  const fit = () => { map.fitBounds(ext.getBounds(), { padding: [10, 10] }); fitted = true; };
+  if (mapEl.clientWidth > 0) fit();  // zero-size (hidden) containers would zoom to max, so wait for a size
+  const ro = new ResizeObserver(() => { map.invalidateSize(); if (!fitted && mapEl.clientWidth > 0) fit(); });
+  ro.observe(mapEl);
+
+  let drawing = false, anchor = null;
+  function setDrawing(on) {
+    drawing = on; anchor = null;
+    btn.classList.toggle("on", on);
+    mapEl.style.cursor = on ? "crosshair" : "";
+    map.dragging[on ? "disable" : "enable"]();
+  }
+  btn.addEventListener("click", () => setDrawing(!drawing));
+  map.on("mousedown", e => { if (drawing) anchor = e.latlng; });
+  map.on("mousemove", e => {
+    if (!anchor) return;
+    const a = anchor, p = e.latlng;
+    model.set("bbox", [clamp(Math.min(a.lng, p.lng), -180, 180), clamp(Math.min(a.lat, p.lat), -90, 90),
+                       clamp(Math.max(a.lng, p.lng), -180, 180), clamp(Math.max(a.lat, p.lat), -90, 90)]);
+    draw();
+  });
+  const finish = () => { if (!anchor) return; model.save_changes(); setDrawing(false); };
+  window.addEventListener("mouseup", finish);  // also fires when released outside the map
+  return () => { window.removeEventListener("mouseup", finish); ro.disconnect(); };
 }
 export default { render };
 """
 
 _WIDGET_CSS = """
 .stacsel{font:13px/1.4 var(--jp-ui-font-family,system-ui,sans-serif);border:1px solid rgba(128,128,128,.4);
-  border-radius:8px;padding:10px;max-width:420px;color:inherit}
-.stacsel-map{display:block;border:1px solid rgba(128,128,128,.4);cursor:crosshair;touch-action:none}
-.stacsel-hint{font-size:11px;opacity:.6;margin-top:3px}
+  border-radius:8px;padding:10px;max-width:640px;color:inherit}
+.stacsel-bar{display:flex;align-items:center;gap:8px;margin-bottom:6px}
+.stacsel-draw{cursor:pointer;font:inherit;padding:2px 10px;border:1px solid rgba(128,128,128,.6);
+  border-radius:6px;background:transparent;color:inherit}
+.stacsel-draw.on{background:#3b82f6;border-color:#1d4ed8;color:#fff}
+.stacsel-hint{font-size:11px;opacity:.6}
+.stacsel-map{height:300px;border:1px solid rgba(128,128,128,.4);border-radius:4px}
 .stacsel-row{display:flex;gap:8px;margin-top:8px}
 .stacsel-row label{flex:1;display:flex;flex-direction:column;font-size:12px;opacity:.85;gap:2px}
 .stacsel-err{color:#dc2626;font-size:12px;min-height:14px;margin-top:4px}
@@ -320,7 +413,6 @@ if anywidget is not None:
         end = traitlets.Unicode("").tag(sync=True)
         extent = traitlets.List(traitlets.Float(), default_value=[-180.0, -90.0, 180.0, 90.0]).tag(sync=True)
         min_date = traitlets.Unicode("").tag(sync=True)
-        land = traitlets.Unicode("").tag(sync=True)
 
 else:
     SearchSelector = None  # type: ignore[assignment,misc]
@@ -345,17 +437,21 @@ class Items(pystac.ItemCollection):
         note = " <span class='m'>max_items reached: results may be truncated</span>" if n and n == self._limit else ""
         rng = f"<div class='m'>{_day(min(los))} to {_day(max(his))}</div>" if los else ""
         bboxes = [i.bbox for i in items[:500] if i.bbox]
+        when = lambda i, lo, hi: _day(lo) if i.datetime else f"{_day(lo)} to {_day(hi)}"
+        feats = [
+            {"type": "Feature", "geometry": i.geometry, "properties": {"t": f"{i.id} \u00b7 {when(i, lo, hi)}"}}
+            for i, (lo, hi) in zip(items[:500], spans) if i.geometry
+        ]
         rows = ""
         for i, (lo, hi) in zip(items[:20], spans):
-            when = _day(lo) if i.datetime else f"{_day(lo)} to {_day(hi)}"
             cc = i.properties.get("eo:cloud_cover")
             rows += (
-                f"<tr><td>{html.escape(i.id)}</td><td class='m nw'>{when}</td>"
+                f"<tr><td>{html.escape(i.id)}</td><td class='m nw'>{when(i, lo, hi)}</td>"
                 f"<td class='m nw'>{'' if cc is None else f'{cc:.0f}% cloud'}</td></tr>"
             )
         return (
             f"{_CSS}<div class='sc'><h4>{n} items{note}</h4>{rng}"
-            f"<div class='row'><div>{_svg_map(bboxes, view=_items_view(bboxes)) if bboxes else ''}</div></div>"
+            f"<div style='margin-top:8px'>{_map_html({'features': feats}, _svg_map(bboxes, view=_items_view(bboxes))) if feats or bboxes else ''}</div>"
             f"<details><summary>First {min(n, 20)} items</summary><table>{rows}</table></details></div>"
         )
 
@@ -396,11 +492,14 @@ class CollectionView:
             "license": c.license,
             "providers": ", ".join(p.name for p in c.providers or []),
         }
+        mp = ""
+        if bboxes:
+            data = {"bboxes": [list(_bbox4(b)) for b in bboxes]}
+            mp = f"<div class='mp'>{_map_html(data, _svg_map(bboxes))}</div>"
         parts = [
             f"<h4>{html.escape(c.title or c.id)}</h4>",
-            f"<div class='m'>{html.escape((c.description or '')[:300])}</div>",
-            f"<div class='row'><div>{_svg_map(bboxes) if bboxes else ''}</div>"
-            f"<div style='min-width:220px;flex:1'><b>Temporal extent</b>{temporal}{_table(head)}</div></div>",
+            _desc_html(c.description),
+            f"<div class='row'>{mp}<div class='info'><b>Temporal extent</b>{temporal}{_table(head)}</div></div>",
         ]
         summaries = c.summaries.to_dict() if getattr(c, "summaries", None) else {}
         if summaries:
@@ -420,7 +519,7 @@ class CollectionView:
         if SearchSelector is None:
             raise ImportError("selector() needs anywidget: pip install anywidget")
         bbox, start, end = _extent_defaults(self._col)
-        self._selector = SearchSelector(bbox=bbox, extent=bbox, start=start, end=end, min_date=start, land=_LAND)
+        self._selector = SearchSelector(bbox=bbox, extent=bbox, start=start, end=end, min_date=start)
         return self._selector
 
     def clear_selection(self) -> None:
