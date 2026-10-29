@@ -368,6 +368,8 @@ _MEDIA = {
     "application/vnd+zarr": "Zarr",
     "application/x-parquet": "Parquet",
     "application/vnd.apache.parquet": "Parquet",
+    "text/csv": "CSV",
+    "text/tab-separated-values": "TSV",
     "application/wmo-grib2": "GRIB2",
     "application/vnd.laszip+copc": "COPC",
     "application/geopackage+sqlite3": "GeoPackage",

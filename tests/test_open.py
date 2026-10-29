@@ -101,6 +101,22 @@ def test_filegdb_zip(tmp_path):
     assert spec["kind"] == "choice" and spec["choices"] == ["meta", "pts", "one"] and spec["default"] == "pts"
 
 
+def test_csv(tmp_path):
+    gpd = pytest.importorskip("geopandas")
+    for n in range(2):
+        pd.DataFrame({"Lon": [n, n + 0.5], "Lat": [n, n], "v": [n, n]}).to_csv(tmp_path / f"c{n}.csv", index=False)
+    pd.DataFrame({"a": [1], "b": [2]}).to_csv(tmp_path / "t.tsv.gz", sep="\t", index=False)
+    it = lambda i, p, t=None: item_with(f"c{i}", D(2020), d=(str(tmp_path / p), t))
+    items = [it(0, "c0.csv", "text/csv"), it(1, "c1.csv")]
+    df = Items(items).open()
+    assert isinstance(df, gpd.GeoDataFrame) and len(df) == 4 and df.crs == "EPSG:4326" and df.geometry.x[1] == 0.5
+    spec = openers.opener_params("csv", items, ["d"])
+    assert spec["x"]["choices"] == ["Lon", "Lat", "v"] and (spec["x"]["default"], spec["y"]["default"]) == ("Lon", "Lat")
+    assert type(Items(items).open(x=None)) is pd.DataFrame
+    tsv = Items([it(2, "t.tsv.gz")])
+    assert list(tsv.open().columns) == ["a", "b"] and openers.opener_params("csv", list(tsv), ["d"])["x"]["default"] is None
+
+
 def test_opener_override_and_user_registration():
     it = item_with("a", D(2020), d=("x.nc", "application/x-netcdf"))
     calls = []

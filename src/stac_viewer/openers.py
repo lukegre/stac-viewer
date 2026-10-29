@@ -332,3 +332,48 @@ def _open_filegdb(items, assets, **kwargs):
         kwargs["layer"] = _gdb_default_layer(items, assets)
     out = [gpd.read_file(a.href, **kwargs) for _, a in pairs]
     return out[0] if len(out) == 1 else pd.concat(out, ignore_index=True)
+
+
+_CSV_X, _CSV_Y = ("lon", "longitude", "lng", "long", "x", "easting"), ("lat", "latitude", "y", "northing")
+
+
+def _csv_read(href: str, **kwargs):
+    pd = _need("pandas", "csv")
+    if _ext(href.removesuffix(".gz")) == ".tsv":
+        kwargs.setdefault("sep", "\t")
+    return pd.read_csv(href, **kwargs)
+
+
+def _csv_columns(items, assets):
+    """Header of the first selected CSV."""
+    return list(_csv_read(_pairs(items, assets)[0][1].href, nrows=0).columns)
+
+
+def _csv_coord(names):
+    def default(items, assets):
+        cols = {c.lower(): c for c in _csv_columns(items, assets)}
+        return next((cols[n] for n in names if n in cols), None)
+
+    return default
+
+
+@register_opener(
+    "csv",
+    media_types=["text/csv", "application/csv", "text/tab-separated-values"],
+    extensions=[".csv", ".csv.gz", ".tsv", ".tsv.gz"],
+    params={
+        "x": Param(_csv_columns, _csv_coord(_CSV_X)),  # x and y set: GeoDataFrame of points
+        "y": Param(_csv_columns, _csv_coord(_CSV_Y)),
+        "crs": Param(str, lambda i, a: _infer_crs(i, a) or "EPSG:4326"),
+    },
+)
+def _open_csv(items, assets, x=..., y=..., crs=None, **kwargs):
+    pd = _need("pandas", "csv")
+    x = _csv_coord(_CSV_X)(items, assets) if x is ... else x  # not passed: infer; None: plain DataFrame
+    y = _csv_coord(_CSV_Y)(items, assets) if y is ... else y
+    out = [_csv_read(a.href, **kwargs) for _, a in _pairs(items, assets)]
+    df = out[0] if len(out) == 1 else pd.concat(out, ignore_index=True)
+    if x and y:
+        gpd = _need("geopandas", "csv")
+        df = gpd.GeoDataFrame(df, geometry=gpd.points_from_xy(df[x], df[y]), crs=crs or "EPSG:4326")
+    return df
