@@ -798,13 +798,17 @@ async function render({ model, el }) {
 export default { render };
 """
 
-_OPEN_ESM = _COPY_JS + _DARK_JS + """
+_OPEN_ESM = _COPY_JS + _DARK_JS + f"const SEARCH = {json.dumps(_SEARCH_SVG)};" + """
 function render({ model, el }) {
   el.classList.add("stacsel");
   el.style.colorScheme = isDark(el) ? "dark" : "light";
   el.innerHTML = `
     <div class="stacsel-panel">
-      <div><p class="lbl">Assets</p><div class="stacsel-assets"></div></div>
+      <div><p class="lbl">Assets</p>
+        <div class="stacsel-atb"><span class="stacsel-af">${SEARCH}<input type="search" placeholder="Filter by key, title or band"></span>
+          <span class="stacsel-seg stacsel-dt"><button type="button" data-d="1">Data</button><button type="button" data-d="">All</button></span>
+          <span class="stacsel-seg"><button type="button" class="clr">Clear all</button></span></div>
+        <div class="stacsel-assets"></div></div>
       <div class="stacsel-pars"><p class="lbl">Settings</p><div class="stacsel-row"></div></div>
       <div><p class="lbl">Open call</p><div class="stacsel-cw"><pre class="stacsel-code"></pre>
         <button type="button" class="stacsel-cp" aria-label="Copy open call"></button></div>
@@ -814,27 +818,51 @@ function render({ model, el }) {
   const list = q(".stacsel-assets"), row = q(".stacsel-pars .stacsel-row"), code = q(".stacsel-code"), err = q(".stacsel-err");
   const setAssets = a => { model.set("assets", a); model.save_changes(); };
   const setValue = (k, v) => { model.set("values", { ...model.get("values"), [k]: v }); model.save_changes(); };
+  const fin = q(".stacsel-af input");
+  let dataOnly = model.get("asset_options").some(o => o.data);
+  const pick = (name, keys, on) => {  // add/remove keys; another opener's keys replace the selection
+    const cur = model.get("assets"), next = !on ? cur.filter(k => !keys.includes(k)) : name === model.get("opener") ? [...cur, ...keys] : keys;
+    setAssets(model.get("asset_options").map(a => a.key).filter(k => next.includes(k)));
+  };
   function buildAssets() {  // one group per opener; assets without one are disabled
     list.innerHTML = "";
-    const groups = {};
-    for (const o of model.get("asset_options")) (groups[o.opener || ""] ||= []).push(o);
-    for (const [name, opts] of Object.entries(groups)) {
-      const g = document.createElement("div"), h = document.createElement("div");
+    const groups = {}, opts = model.get("asset_options");
+    for (const o of opts) (groups[o.opener || ""] ||= []).push(o);
+    for (const [name, os] of Object.entries(groups)) {
+      const g = document.createElement("div"), h = document.createElement(name ? "button" : "div");
       g.className = "stacsel-grp"; h.className = "stacsel-gh"; h.textContent = name || "no opener"; g.append(h);
-      for (const o of opts) {
+      if (name) {  // heading toggles every shown asset of the group
+        h.type = "button"; h.title = "Select / clear all shown " + name + " assets";
+        h.addEventListener("click", () => {
+          const keys = [...g.querySelectorAll("label:not([hidden]) input")].map(cb => cb.value), sel = model.get("assets");
+          pick(name, keys, !keys.every(k => sel.includes(k)));
+        });
+      }
+      for (const o of os) {
         const lab = document.createElement("label"), cb = document.createElement("input");
         cb.type = "checkbox"; cb.value = o.key; cb.disabled = !name;
-        cb.addEventListener("change", () => {
-          const cur = model.get("assets"), same = name === model.get("opener");
-          const next = !cb.checked ? cur.filter(k => k !== o.key) : same ? [...cur, o.key] : [o.key];  // a new opener replaces the selection
-          setAssets(model.get("asset_options").map(a => a.key).filter(k => next.includes(k)));
-        });
-        lab.append(cb, o.label); g.append(lab);
+        cb.addEventListener("change", () => pick(name, [o.key], cb.checked));
+        lab.dataset.s = [o.key, o.title, ...o.bands].join(" ").toLowerCase(); lab.dataset.d = o.data ? "1" : "";
+        lab.title = o.title || o.key; lab.append(cb, o.label);
+        if (o.bands.length) { const b = document.createElement("span"); b.className = "stacsel-bn"; b.textContent = o.bands.join(", "); lab.append(b); }
+        g.append(lab);
       }
       list.append(g);
     }
+    q(".stacsel-dt").hidden = !opts.some(o => o.data) || opts.every(o => o.data);
+    q(".stacsel-af").hidden = opts.length < 8;
     sync();
   }
+  function filter() {  // checked assets always stay visible
+    const t = fin.value.trim().toLowerCase();
+    list.querySelectorAll("label").forEach(lab => {
+      lab.hidden = !lab.querySelector("input").checked && ((dataOnly && !lab.dataset.d) || (t && !lab.dataset.s.includes(t)));
+    });
+    list.querySelectorAll(".stacsel-grp").forEach(g => { g.hidden = !g.querySelector("label:not([hidden])"); });
+    el.querySelectorAll(".stacsel-dt button").forEach(b => b.classList.toggle("on", !!b.dataset.d === dataOnly));
+  }
+  fin.addEventListener("input", filter);
+  el.querySelectorAll(".stacsel-dt button").forEach(b => b.addEventListener("click", () => { dataOnly = !!b.dataset.d; filter(); }));
   function buildPars() {  // one control per opener param
     row.innerHTML = "";
     for (const [k, p] of Object.entries(model.get("params"))) {
@@ -855,10 +883,12 @@ function render({ model, el }) {
   function sync() {  // push model state into the controls (typing keeps its own value)
     const sel = model.get("assets"), vals = model.get("values");
     list.querySelectorAll("input").forEach(cb => { cb.checked = sel.includes(cb.value); });
+    q(".clr").disabled = !sel.length; filter();
     row.querySelectorAll("[data-k]").forEach(inp => { if (inp !== document.activeElement) inp.value = vals[inp.dataset.k] ?? ""; });
     code.textContent = model.get("code"); err.textContent = model.get("error");
   }
   copyBtn(el, q(".stacsel-cp"), () => code.textContent);
+  q(".clr").addEventListener("click", () => setAssets([]));
   model.on("change:asset_options", buildAssets); model.on("change:params", buildPars);
   for (const k of ["assets", "values", "code", "error"]) model.on("change:" + k, sync);
   buildAssets(); buildPars();
@@ -876,7 +906,8 @@ _WIDGET_CSS = _ROOT + """
 .stacsel-seg{display:inline-flex;border:1px solid var(--sv-border-strong);border-radius:4px;overflow:hidden;background:var(--sv-bg)}
 .stacsel-seg button{font:inherit;font-size:12px;color:var(--sv-fg);background:none;border:0;padding:4px 10px;cursor:pointer}
 .stacsel-seg button+button{border-left:1px solid var(--sv-border-strong)}
-.stacsel-seg button.on{background:var(--sv-accent);color:#fff}.stacsel-seg button:hover:not(.on){background:var(--sv-alt)}
+.stacsel-seg button.on{background:var(--sv-accent);color:#fff}.stacsel-seg button:hover:not(.on,:disabled){background:var(--sv-alt)}
+.stacsel-seg button:disabled{color:var(--sv-faint);cursor:default}
 .stacsel-panel{display:flex;flex-direction:column;gap:14px;min-width:0}
 .stacsel-row{display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap}
 .stacsel label{display:flex;flex-direction:column;gap:3px;font-size:11px;color:var(--sv-muted)}
@@ -913,7 +944,17 @@ _WIDGET_CSS = _ROOT + """
 .stacsel-cp svg{width:14px;height:14px}.stacsel-cw:hover .stacsel-cp,.stacsel-cp:focus-visible{opacity:1}
 .stacsel-cp:hover,.stacsel-cp.ok{color:var(--sv-accent);border-color:var(--sv-accent)}
 .stacsel-sels{display:contents}
-.stacsel-assets{display:flex;flex-wrap:wrap;gap:6px 24px}.stacsel-gh{font-size:11px;color:var(--sv-muted);margin-bottom:2px}
+.stacsel-atb{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px}.stacsel-atb [hidden]{display:none}
+.stacsel-af{position:relative;display:flex;align-items:center;flex:0 1 260px;color:var(--sv-muted)}
+.stacsel-af svg{position:absolute;left:8px;width:13px;height:13px;pointer-events:none}
+.stacsel-af input{""" + _IN + """;width:100%;padding-left:28px}.stacsel-af input:focus{""" + _IN_FOCUS + """}
+.stacsel-af input::placeholder{color:var(--sv-faint)}
+.stacsel-assets{display:flex;flex-direction:column;gap:8px;max-height:240px;overflow:auto;padding-right:4px}
+.stacsel-grp{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:3px 16px}.stacsel-grp>.stacsel-gh{grid-column:1/-1}
+.stacsel-assets [hidden]{display:none}
+.stacsel-gh{display:block;font:inherit;font-size:11px;color:var(--sv-muted);margin-bottom:2px;padding:0;background:none;border:0;text-align:left}
+button.stacsel-gh{cursor:pointer}button.stacsel-gh:hover{color:var(--sv-accent);text-decoration:underline}
+.stacsel-bn{color:var(--sv-faint);font-size:11px}
 .stacsel-assets label{flex-direction:row;align-items:center;gap:6px;font-size:12px;color:var(--sv-fg)}
 .stacsel-assets label:has(:disabled){color:var(--sv-faint)}
 .stacsel-err{color:var(--sv-err);font-size:12px;margin-top:6px}.stacsel-err:empty{display:none}

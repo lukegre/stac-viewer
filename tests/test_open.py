@@ -159,6 +159,10 @@ def test_resolve_and_options():
     assert list(opts) == ["nc", "odd", "meta"]
     assert opts["nc"]["opener"] == "netcdf" and opts["nc"]["data"] and opts["nc"]["label"].startswith("nc (")
     assert opts["odd"]["opener"] is None and not opts["meta"]["data"]
+    it.assets["nc"].title = "Red band"
+    it.assets["nc"].extra_fields.update({"eo:bands": [{"name": "B04", "common_name": "red"}], "bands": [{"common_name": "red"}]})
+    nc = openers.options([it])[0]
+    assert nc["title"] == "Red band" and nc["bands"] == ["red"] and opts["odd"]["bands"] == []
 
 
 def cog_item(id, asset_extra=None, **props):

@@ -134,10 +134,13 @@ def _avail(owners: list) -> dict[str, pystac.Asset]:
 
 
 def options(owners: list) -> list[dict]:
-    """One entry per asset key: label, matched opener (or None) and whether it has the 'data' role."""
+    """One entry per asset key: label, matched opener (or None), whether it has the 'data' role, and band
+    common names (``eo:bands``/``bands``) for display and filtering."""
     _load_plugins()
     return [
-        dict(key=k, label=_fmt(k, a), opener=_match(a), data="data" in (a.roles or []))
+        dict(key=k, label=_fmt(k, a), opener=_match(a), data="data" in (a.roles or []), title=a.title or "",
+             bands=list(dict.fromkeys(b["common_name"] for f in ("eo:bands", "bands")
+                                      for b in a.extra_fields.get(f) or [] if b.get("common_name"))))
         for k, a in _avail(owners).items()
     ]
 
