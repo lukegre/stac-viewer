@@ -74,7 +74,7 @@ def _collection_pages(client: Client) -> Iterator[dict]:
     return itertools.chain([first] if first else [], pages)
 
 
-def _in_marimo() -> bool:  # marimo shows full-height outputs, so long lists shouldn't scroll there
+def _in_marimo() -> bool:
     return "marimo" in sys.modules and sys.modules["marimo"].running_in_notebook()
 
 
@@ -830,13 +830,13 @@ class Collections:
             f"<button type='button' class='cp' data-id='{html.escape(k)}' aria-label='Copy id' hidden>{_COPY_SVG}</button></td></tr>"
             for k, v in self._by_attr.items()
         )
-        uid, ovl = f"stacq-{uuid.uuid4().hex}", "il" if _in_marimo() else "il ovl"
+        uid = f"stacq-{uuid.uuid4().hex}"
         return (
             f"{_head()}<div class='sc' id='{uid}'><div class='hd'><span class='ty'>{'STAC API' if api else 'STAC catalog'}</span>"
             f"<span class='tt'>{html.escape(title)}</span><span class='mt'>{n} collections</span></div>"
             f"{_desc_html(getattr(cat, 'description', None))}<div style='margin-top:10px'>{_table(head)}</div>"
             f"<div class='q' hidden>{_SEARCH_SVG}<input type='search' placeholder='Filter by title, id, keyword or description'>"
-            f"<span class='m'></span></div><div class='{ovl}'><table class='tb ov'><tbody>{rows}</tbody></table></div></div>"
+            f"<span class='m'></span></div><div class='il ovl'><table class='tb ov'><tbody>{rows}</tbody></table></div></div>"
             f"<script>(()=>{{const id={_json(uid)},CHECK={_json(_CHECK_SVG)};{_FILTER_JS}}})()</script>"
         )
 
