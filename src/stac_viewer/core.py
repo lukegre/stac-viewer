@@ -268,7 +268,7 @@ _CSS = "<style>" + _ROOT + """
 .sc .cb>i{position:absolute;inset:0 auto 0 0;background:var(--sv-muted)}
 .sc .pop{display:flex;gap:10px;align-items:flex-start;font-size:12px}
 .sc .pop img{display:block;flex:none;width:160px;max-height:160px;object-fit:contain}
-.sc .pop>div{min-width:0;max-width:220px}.sc .pop div div{color:var(--sv-muted)}
+.sc .pop>div{min-width:0;max-width:220px}.sc .pop div div{color:var(--sv-muted)}.sc .pop div .pt{color:inherit;margin-bottom:2px}
 .sc .pop b{display:block;margin-bottom:3px;font:11px var(--sv-mono);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .sc .tip{position:absolute;z-index:1000;max-width:360px;padding:8px 10px;pointer-events:none;background:var(--sv-bg);color:var(--sv-fg);
  border:1px solid var(--sv-border-strong);border-left:3px solid var(--sv-accent);border-radius:4px;box-shadow:0 4px 14px rgba(0,0,0,.18);font-size:12px;line-height:1.45}
@@ -503,9 +503,10 @@ try {
     const layers = [], rows = {}, http = u => /^https?:\\/\\//i.test(u || "");
     (el.closest(".sc") || document).querySelectorAll("tr[data-i]").forEach(r => rows[r.dataset.i] = r);  // list rows, if any
     const row = (i, c, on) => rows[i] && rows[i].classList.toggle(c, on);
-    const dim = { opacity: 0.25, fillOpacity: 0.06 };
+    const dim = { opacity: 0.25, fillOpacity: 0.06 }, pt = { ...base, fillOpacity: 0.6 };  // points need a visible fill
+    const rest = f => /Point$/.test(f.geometry.type) ? pt : base;
     let sel, hv;  // selected (clicked) and hovered item
-    const paint = () => layers.forEach((l, j) => l.setStyle(j === sel || j === hv ? hl : hv != null ? dim : base));
+    const paint = () => layers.forEach((l, j) => l.setStyle(j === sel || j === hv ? hl : hv != null ? dim : rest(l.feature)));
     const hover = (i, on) => {
       if (hv != null) row(hv, "hov", false);
       hv = on ? i : null;
@@ -519,16 +520,19 @@ try {
       box.className = "pop";
       if (http(p.thumb)) {  // image beside the text; re-pan once its size is known
         const m = document.createElement("img"); m.onload = () => pop.update(); m.src = p.thumb; m.alt = p.id; box.appendChild(m); }
-      box.appendChild(d); add("b", p.id).title = p.id; add("div", p.time);
+      box.appendChild(d); add("b", p.id).title = p.id;
+      if (p.title) add("div", p.title).className = "pt";
+      add("div", p.time);
       for (const [k, v] of Object.entries(p.props || {})) add("div", k + ": " + v);
       if (http(p.href)) { const a = add("a", "item JSON"); a.href = p.href; a.target = "_blank"; a.rel = "noopener"; }
-      pop.setLatLng(layers[i].getBounds().getCenter()).setContent(box).openOn(map);  // closes the previous popup first
+      const l = layers[i];  // markers have a position, shapes have bounds
+      pop.setLatLng(l.getLatLng ? l.getLatLng() : l.getBounds().getCenter()).setContent(box).openOn(map);  // closes the previous popup first
       sel = i; row(i, "sel", true); paint();
       const r = rows[i], c = r && r.closest(".il");
       if (scroll && c) c.scrollTop += r.getBoundingClientRect().top - c.getBoundingClientRect().top - (c.clientHeight - r.offsetHeight) / 2;  // list only, not the page
     };
     map.on("popupclose", () => { if (sel != null) row(sel, "sel", false); sel = null; paint(); });
-    L.geoJSON(data.features, { style: base, onEachFeature: (f, l) => {
+    L.geoJSON(data.features, { style: rest, pointToLayer: (f, ll) => L.circleMarker(ll, { radius: 5 }), onEachFeature: (f, l) => {
       const i = f.properties.i; layers[i] = l;
       l.bindTooltip(tip(f.properties.t)).on({ mouseover: () => hover(i, true), mouseout: () => hover(i, false), click: () => open(i, true) });
       if (rows[i]) rows[i].onmouseenter = () => hover(i, true), rows[i].onmouseleave = () => hover(i, false), rows[i].onclick = () => open(i);
@@ -547,7 +551,22 @@ try {
 """
 
 
-_POP_PROPS = ("platform", "constellation", "gsd", "proj:epsg", "sat:orbit_state")
+_POP_PROPS = ("platform", "constellation", "gsd", "proj:epsg", "sat:orbit_state")  # listed first
+_POP_SKIP = {"datetime", "start_datetime", "end_datetime", "created", "updated", "title", "description", "eo:cloud_cover"}
+
+
+def _pop_props(p: dict, n: int = 12) -> dict:
+    """Popup properties: well-known keys first, then any other scalar ones; at most n, long strings cut."""
+    keys = [k for k in _POP_PROPS if k in p] + [k for k in p if k not in _POP_PROPS and k not in _POP_SKIP]
+    out = {}
+    for k in keys:
+        v = p[k]
+        if v is None or not isinstance(v, (str, int, float, bool)):
+            continue
+        out[k] = v if not isinstance(v, str) or len(v) <= 80 else v[:79] + "…"
+        if len(out) == n:
+            break
+    return out
 
 
 def _is_http(u: str) -> bool:
@@ -1096,12 +1115,14 @@ class Items(pystac.ItemCollection):
             if not i.geometry:
                 continue
             w, cc = when(i, lo, hi), i.properties.get("eo:cloud_cover")
-            props = {k_: i.properties[k_] for k_ in _POP_PROPS if i.properties.get(k_) is not None}
+            props = _pop_props(i.properties)
             if cc is not None:
                 props["cloud cover"] = f"{cc:.0f}%"
             href = i.get_self_href()
             tm = _stamp(i.datetime) if i.datetime else f"{_stamp(lo)} to {_stamp(hi or lo)}" if lo else ""
-            f = {"i": k, "t": f"{i.id} \u00b7 {w}", "id": i.id, "when": w, "time": tm, "props": props}
+            title = str(i.properties.get("title") or "")
+            f = {"i": k, "t": " \u00b7 ".join(x for x in (i.id, title, w) if x), "id": i.id, "title": title,
+                 "when": w, "time": tm, "props": props}
             if href and _is_http(href):
                 f["href"] = href
             if thumb := _thumb(i):
@@ -1109,7 +1130,8 @@ class Items(pystac.ItemCollection):
             feats.append({"type": "Feature", "geometry": i.geometry, "properties": f})
             bar = "" if cc is None else f"<span class='cb'><i style='width:{min(max(cc, 0), 100):.0f}%'></i></span>{cc:.0f}%"
             rows += (
-                f"<tr data-i='{k}'><td class='id' title='{html.escape(i.id)}'>{html.escape(i.id)}</td><td class='m nw'>{w}</td>"
+                f"<tr data-i='{k}'><td class='id' title='{html.escape(f['t'])}'>{html.escape(i.id)}"
+                f"{f' <span class=\'m\'>{html.escape(title)}</span>' if title else ''}</td><td class='m nw'>{w}</td>"
                 f"<td class='m nw'{'' if cc is None else f' title=\'{cc:.0f}% cloud\''}>{bar}</td></tr>"
             )
         mp = _map_html({"features": feats}, _svg_map(bboxes, view=_items_view(bboxes))) if feats or bboxes else ""
