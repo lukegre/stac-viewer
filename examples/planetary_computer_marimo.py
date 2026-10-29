@@ -1,7 +1,7 @@
 import marimo
 
 __generated_with = "0.25.2"
-app = marimo.App(width="medium")
+app = marimo.App(width="medium", css_file="full_height.css")
 
 
 @app.cell
@@ -146,6 +146,11 @@ def _(mosaic):
         .plot.imshow(size=5, vmin=0.03, vmax=0.2)
     )
     _img.axes
+    return
+
+
+@app.cell
+def _():
     return
 
 

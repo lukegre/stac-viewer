@@ -1,7 +1,7 @@
 import marimo
 
 __generated_with = "0.25.2"
-app = marimo.App(width="medium")
+app = marimo.App(width="medium", css_file="full_height.css")
 
 
 @app.cell
@@ -58,6 +58,11 @@ def _(out):
         .plot.imshow(aspect=2, size=6, cmap="Spectral_r", vmin=0, vmax=25)
     )
     _img.axes
+    return
+
+
+@app.cell
+def _():
     return
 
 

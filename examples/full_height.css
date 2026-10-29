@@ -1,0 +1,2 @@
+/* Let cell outputs take their full height instead of scrolling */
+.output-area { max-height: none !important; overflow: visible !important; }

@@ -30,6 +30,7 @@ import math
 import operator
 import os
 import re
+import sys
 import time
 import uuid
 from importlib.resources import files
@@ -71,6 +72,14 @@ def _collection_pages(client: Client) -> Iterator[dict]:
         pages = io.get_pages(url)
         first = next(pages, None)
     return itertools.chain([first] if first else [], pages)
+
+
+def _in_marimo() -> bool:  # marimo shows full-height outputs, so long lists shouldn't scroll there
+    return "marimo" in sys.modules and sys.modules["marimo"].running_in_notebook()
+
+
+def _head() -> str:  # marimo iframes script outputs; without a doctype its auto-resize misreads quirks-mode heights
+    return ("<!doctype html>" if _in_marimo() else "") + _CSS
 
 
 def _ident(raw: str, taken: set[str]) -> str:
@@ -551,7 +560,7 @@ class Items(pystac.ItemCollection):
                f"<tbody>{rows}</tbody></table></div>" if rows else "")
         meta = " &middot; ".join(x for x in (note, rng) if x)
         return (
-            f"{_CSS}<div class='sc'><div class='hd'><span class='ty'>Items</span><span class='tt'>{n} items</span>"
+            f"{_head()}<div class='sc'><div class='hd'><span class='ty'>Items</span><span class='tt'>{n} items</span>"
             f"<span class='mt'>{meta}</span></div>"
             f"<div class='grid eq'><div class='mp'>{mp}</div>{lst}</div></div>"
         )
@@ -639,7 +648,7 @@ class CollectionView:
         if c.assets:
             ca = {k: {"href": a.href, "type": a.media_type} for k, a in c.assets.items()}
             parts.append(_assets_html("Collection assets", ca, href=True))
-        return f"{_CSS}<div class='sc'>{''.join(parts)}</div>"
+        return f"{_head()}<div class='sc'>{''.join(parts)}</div>"
 
     # ---- selector + search
     def selector(self):
@@ -821,13 +830,13 @@ class Collections:
             f"<button type='button' class='cp' data-id='{html.escape(k)}' aria-label='Copy id' hidden>{_COPY_SVG}</button></td></tr>"
             for k, v in self._by_attr.items()
         )
-        uid = f"stacq-{uuid.uuid4().hex}"
+        uid, ovl = f"stacq-{uuid.uuid4().hex}", "il" if _in_marimo() else "il ovl"
         return (
-            f"{_CSS}<div class='sc' id='{uid}'><div class='hd'><span class='ty'>{'STAC API' if api else 'STAC catalog'}</span>"
+            f"{_head()}<div class='sc' id='{uid}'><div class='hd'><span class='ty'>{'STAC API' if api else 'STAC catalog'}</span>"
             f"<span class='tt'>{html.escape(title)}</span><span class='mt'>{n} collections</span></div>"
             f"{_desc_html(getattr(cat, 'description', None))}<div style='margin-top:10px'>{_table(head)}</div>"
             f"<div class='q' hidden>{_SEARCH_SVG}<input type='search' placeholder='Filter by title, id, keyword or description'>"
-            f"<span class='m'></span></div><div class='il ovl'><table class='tb ov'><tbody>{rows}</tbody></table></div></div>"
+            f"<span class='m'></span></div><div class='{ovl}'><table class='tb ov'><tbody>{rows}</tbody></table></div></div>"
             f"<script>(()=>{{const id={_json(uid)},CHECK={_json(_CHECK_SVG)};{_FILTER_JS}}})()</script>"
         )
 
