@@ -32,8 +32,8 @@ def _norm(t: str) -> str:
 
 
 class Param(NamedTuple):
-    """Opener setting: ``kind`` is ``str``/``float``/``int`` or a list of choices; ``default`` is a
-    value, None, or ``f(items, assets) -> value`` inferred from the selection."""
+    """Opener setting: ``kind`` is ``str``/``float``/``int``, a list of choices, or ``f(items, assets) -> choices``
+    (e.g. read from the file); ``default`` is a value, None, or ``f(items, assets) -> value`` inferred from the selection."""
 
     kind: object
     default: object = None
@@ -108,6 +108,8 @@ def resolve(owners: list, assets=None, opener: str | None = None) -> tuple[str, 
         keys = [assets] if isinstance(assets, str) else list(assets)
         if missing := [k for k in keys if k not in avail]:
             raise KeyError(f"assets {missing} not found. Available: {listing}")
+        if not keys:  # e.g. an open_settings() widget with nothing ticked
+            raise ValueError(f"no assets selected. Available: {listing}")
     if opener is None:
         names = {k: _match(avail[k]) for k in keys}
         if None in names.values():
@@ -161,7 +163,13 @@ def opener_params(name: str, owners: list, assets: list[str]) -> dict[str, dict]
                 d = d(owners, assets)
             except Exception:
                 d = None
-        spec = {"kind": "choice", "choices": list(p.kind)} if isinstance(p.kind, (list, tuple)) else {"kind": p.kind.__name__}
+        kind = p.kind
+        if callable(kind) and not isinstance(kind, type):
+            try:
+                kind = list(kind(owners, assets)) or str
+            except Exception:
+                kind = str  # choices unavailable: fall back to free text
+        spec = {"kind": "choice", "choices": list(kind)} if isinstance(kind, (list, tuple)) else {"kind": kind.__name__}
         out[pname] = {**spec, "default": d, "inferred": inferred}
     return out
 
@@ -297,10 +305,30 @@ def _open_geoparquet(items, assets, **kwargs):
     return out[0] if len(out) == 1 else pd.concat(out, ignore_index=True)
 
 
-@register_opener("filegdb", extensions=[".gdb.zip"])
+def _gdb_layers(items, assets):
+    """``[(name, geometry type or None)]`` of the first selected geodatabase."""
+    pyogrio = _need("pyogrio", "gdb")
+    return [tuple(r) for r in pyogrio.list_layers(_pairs(items, assets)[0][1].href)]
+
+
+def _gdb_default_layer(items, assets):
+    """First layer with geometry; GDAL's default is the first layer, often a metadata table."""
+    layers = _gdb_layers(items, assets)
+    return next((n for n, g in layers if g), layers[0][0] if layers else None)
+
+
+@register_opener(
+    "filegdb",
+    media_types=["application/x.filegdb+zip"],  # used by data.geo.admin.ch
+    extensions=[".gdb.zip"],
+    params={"layer": Param(lambda i, a: [n for n, _ in _gdb_layers(i, a)], _gdb_default_layer)},
+)
 def _open_filegdb(items, assets, **kwargs):
     gpd = _need("geopandas", "gdb")
     pd = _need("pandas", "gdb")
     _need("pyogrio", "gdb")  # GDAL's OpenFileGDB driver reads zipped geodatabases directly
-    out = [gpd.read_file(a.href, **kwargs) for _, a in _pairs(items, assets)]  # pick a layer with layer=...
+    pairs = _pairs(items, assets)
+    if kwargs.get("layer") is None:
+        kwargs["layer"] = _gdb_default_layer(items, assets)
+    out = [gpd.read_file(a.href, **kwargs) for _, a in pairs]
     return out[0] if len(out) == 1 else pd.concat(out, ignore_index=True)

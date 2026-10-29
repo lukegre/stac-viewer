@@ -89,12 +89,17 @@ def test_filegdb_zip(tmp_path):
     from shapely.geometry import Point
 
     g = gpd.GeoDataFrame({"a": [1.0, 2.0]}, geometry=[Point(0, 0), Point(1, 1)], crs=4326)
+    gpd.GeoDataFrame({"s": ["ok"]}).to_file(tmp_path / "t.gdb", layer="meta", driver="OpenFileGDB")  # no geometry
     g.to_file(tmp_path / "t.gdb", layer="pts", driver="OpenFileGDB")
     g.iloc[:1].to_file(tmp_path / "t.gdb", layer="one", driver="OpenFileGDB")
     shutil.make_archive(str(tmp_path / "t.gdb"), "zip", root_dir=tmp_path, base_dir="t.gdb")
     it = item_with("g", D(2020), d=(str(tmp_path / "t.gdb.zip"), "application/zip"))
     df = Items([it]).open(layer="one")
     assert isinstance(df, gpd.GeoDataFrame) and len(df) == 1
+    assert len(Items([it]).open()) == 2  # default: first layer with geometry, not GDAL's first layer
+    spec = openers.opener_params("filegdb", [it], ["d"])["layer"]
+    assert spec["kind"] == "choice" and spec["choices"] == ["meta", "pts", "one"] and spec["default"] == "pts"
+
 
 def test_opener_override_and_user_registration():
     it = item_with("a", D(2020), d=("x.nc", "application/x-netcdf"))
@@ -139,6 +144,8 @@ def test_errors():
     assert "nc (nc)" not in str(e.value) and "netcdf" in str(e.value) and "geoparquet" in str(e.value)
     with pytest.raises(KeyError, match="missing"):
         Items([it]).open("missing")
+    with pytest.raises(ValueError, match="no assets selected"):
+        Items([it]).open([])
     with pytest.raises(ValueError, match="no opener"):
         Items([it]).open("odd")
     bare = make_item("b", (0, 0, 1, 1), D(2020))
