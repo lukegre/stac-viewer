@@ -30,6 +30,13 @@ def make_collection(id, items=(), bbox=(-10, -10, 10, 10), t0=D(2000), t1=None):
     return col
 
 
+@pytest.fixture(autouse=True)
+def cache_dir(monkeypatch, tmp_path):
+    d = tmp_path / "cache"
+    monkeypatch.setenv("STAC_VIEWER_CACHE", str(d))
+    return d
+
+
 @pytest.fixture
 def catalog():
     cat = pystac.Catalog("root", "root")
@@ -235,3 +242,57 @@ def test_items_view_aspect_and_clamp():
     assert (e - w) == pytest.approx(2 * (n - s)) and w < 8 and e > 9 and s < 47 and n > 47.5
     assert core._items_view([[-180, -90, 180, 90]]) == (-180, -90, 180, 90)
     assert core._items_view([[170, 0, -170, 1]]) is None
+
+
+# ---------------------------------------------------------------- collection cache
+@pytest.fixture
+def counted(monkeypatch):
+    calls = []
+    real = core._fetch_collections
+
+    def fetch(catalog):
+        calls.append(1)
+        return real(catalog)
+
+    monkeypatch.setattr(core, "_fetch_collections", fetch)
+    return calls
+
+
+def test_cache_hit_and_search_from_cache(saved, counted, cache_dir):
+    browse(saved)
+    cols = browse(saved)
+    assert len(counted) == 1 and len(list(cache_dir.glob("*.json"))) == 1
+    assert len(cols) == 2 and cols.nested_one.title == "Nested-One"
+    # relative links of the static catalog still resolve from the cached collections
+    assert ids(cols.alpha.search()) == ["a1", "a2", "a3", "deep"]
+
+
+def test_cache_refresh_flag(saved, counted):
+    browse(saved)
+    browse(saved, refresh=True)
+    assert len(counted) == 2
+
+
+def test_cache_expires(saved, counted, cache_dir):
+    import os, time
+
+    browse(saved)
+    (path,) = cache_dir.glob("*.json")
+    old = time.time() - core.CACHE_MAX_AGE.total_seconds() - 60
+    os.utime(path, (old, old))
+    browse(saved)
+    assert len(counted) == 2
+    assert path.stat().st_mtime > old  # rewritten
+
+
+def test_corrupt_cache_refetches(saved, counted, cache_dir):
+    browse(saved)
+    (path,) = cache_dir.glob("*.json")
+    path.write_text("{not json")
+    assert len(browse(saved)) == 2
+    assert len(counted) == 2
+
+
+def test_objects_not_cached(catalog, cache_dir):
+    browse(catalog)
+    assert not cache_dir.exists()
