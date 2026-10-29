@@ -203,7 +203,7 @@ _CSS = """<style>
 .sc .il{max-height:260px;overflow:auto}.sc .il th{position:sticky;top:0;background:Canvas;text-align:left;font-weight:600}
 .sc .il tr[data-i]{cursor:pointer}.sc .il tr.hov,.sc .il tr.selected{background:rgba(59,130,246,.15)}
 .sc .il tr.selected{font-weight:600}
-.sc .pop img{display:block;max-width:240px;max-height:200px;margin-top:4px}
+.sc .pop{display:flex;gap:8px;align-items:flex-start}.sc .pop img{display:block;max-width:160px;max-height:160px}
 .sc .tk{display:flex;justify-content:space-between;font-size:11px;opacity:.6}
 </style>"""
 
@@ -345,15 +345,17 @@ try {
     const hover = (i, on) => { layers[i].setStyle(on ? hl : base); if (on) layers[i].bringToFront(); row(i, "hov", on); };
     let sel;
     const open = i => {
-      const p = layers[i].feature.properties, d = document.createElement("div"), add = (t, s) => {
+      const p = layers[i].feature.properties, box = document.createElement("div"), d = document.createElement("div"), add = (t, s) => {
         const e = document.createElement(t); e.textContent = s; d.appendChild(e); return e; };
-      d.className = "pop"; add("b", p.id); add("div", p.when);
+      box.className = "pop"; box.appendChild(d); add("b", p.id); add("div", p.when);
       for (const [k, v] of Object.entries(p.props || {})) add("div", k + ": " + v);
       if (http(p.href)) { const a = add("a", "item JSON"); a.href = p.href; a.target = "_blank"; a.rel = "noopener"; }
-      if (http(p.thumb)) { const m = document.createElement("img"); m.src = p.thumb; m.alt = p.id; d.appendChild(m); }
+      const pop = L.popup({ maxWidth: 400, autoPanPaddingTopLeft: [50, 10] });  // clear of the zoom control
+      if (http(p.thumb)) {  // image beside the text; re-pan once its size is known
+        const m = document.createElement("img"); m.onload = () => pop.update(); m.src = p.thumb; m.alt = p.id; box.appendChild(m); }
       if (sel != null) row(sel, "selected", false);
       sel = i; row(i, "selected", true);
-      L.popup({ maxWidth: 280 }).setLatLng(layers[i].getBounds().getCenter()).setContent(d).openOn(map);
+      pop.setLatLng(layers[i].getBounds().getCenter()).setContent(box).openOn(map);
     };
     map.on("popupclose", () => { if (sel != null) row(sel, "selected", false); sel = null; });
     L.geoJSON(data.features, { style: base, onEachFeature: (f, l) => {
