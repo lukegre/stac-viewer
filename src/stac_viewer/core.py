@@ -265,8 +265,15 @@ _CSS = "<style>" + _ROOT + """
 .sc .tip[hidden]{display:none}.sc .tip b{display:block;margin-bottom:3px;font-size:13px}.sc .tip div{color:var(--sv-muted)}
 .sc .tip img{display:block;width:100%;max-height:180px;object-fit:contain;margin-bottom:6px;border-radius:3px}
 .sc .tip img[hidden]{display:none}
-.sc .q{display:flex;gap:8px;align-items:center;margin:12px 0 8px}.sc .q[hidden]{display:none}
-.sc .q input{""" + _IN + """;flex:0 1 360px}.sc .q input:focus{""" + _IN_FOCUS + """}
+.sc .q{position:relative;display:flex;align-items:center;margin:12px 0 8px;color:var(--sv-muted)}.sc .q[hidden]{display:none}
+.sc .q svg{position:absolute;left:10px;width:14px;height:14px;pointer-events:none}
+.sc .q input{""" + _IN + """;width:100%;height:32px;padding:0 90px 0 32px;border-radius:4px}.sc .q input:focus{""" + _IN_FOCUS + """}
+.sc .q input::placeholder{color:var(--sv-faint)}.sc .q input:hover:not(:focus){border-color:var(--sv-muted)}
+.sc .q span{position:absolute;right:32px;font-size:11px;color:var(--sv-muted);pointer-events:none}
+.sc .ov td.ti{width:100%;white-space:normal}.sc .ov td.id{width:1%;color:var(--sv-muted)}
+.sc .cp{display:inline-flex;vertical-align:middle;margin-left:6px;padding:2px;border:0;border-radius:3px;background:none;color:var(--sv-muted);cursor:pointer;opacity:0}
+.sc .cp svg{width:13px;height:13px}.sc .cp[hidden]{display:none}.sc .cp:hover{color:var(--sv-accent);background:var(--sv-alt)}
+.sc tr:hover .cp,.sc .cp:focus-visible,.sc .cp.ok{opacity:1}.sc .cp.ok{color:var(--sv-accent)}
 </style>"""
 
 
@@ -498,8 +505,14 @@ def _map_html(data: dict, fallback_svg: str) -> str:
     )
 
 
+_ICON = "<svg viewBox='0 0 16 16' fill='none' stroke='currentColor' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'>{}</svg>"
+_SEARCH_SVG = _ICON.format("<circle cx='7' cy='7' r='4.5'/><path d='M10.5 10.5 14 14'/>")
+_COPY_SVG = _ICON.format("<rect x='5.5' y='5.5' width='8' height='8' rx='1.5'/><path d='M10.5 5.5V3.5a1 1 0 0 0-1-1h-6a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2'/>")
+_CHECK_SVG = _ICON.format("<path d='M3 8.5 6.5 12 13 4.5'/>")
+
+
 # ------------------------------------------------------------ interactive selector
-_ESM = _LEAFLET_JS + """
+_ESM = _LEAFLET_JS + f"const COPY = {json.dumps(_COPY_SVG)}, CHECK = {json.dumps(_CHECK_SVG)};" + """
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const DAY = 864e5, ms = s => Date.parse(s), ymd = t => new Date(t).toISOString().slice(0, 10);  // UTC day strings
 const rb = b => [[b[1], b[0]], [b[3], b[2]]];  // [w, s, e, n] -> Leaflet bounds
@@ -549,7 +562,8 @@ async function render({ model, el }) {
             <span class="stacsel-sels"></span>
           </div>
         </div>
-        <div><p class="lbl">Search call</p><pre class="stacsel-code"></pre></div>
+        <div><p class="lbl">Search call</p><div class="stacsel-cw"><pre class="stacsel-code"></pre>
+          <button type="button" class="stacsel-cp" aria-label="Copy search call"></button></div></div>
       </div>
     </div>`;
   const q = s => el.querySelector(s);
@@ -568,6 +582,8 @@ async function render({ model, el }) {
     const b = model.get("bbox"), poly = model.get("polygon"), cloud = model.get("cloud_cover"), flt = model.get("filters");
     if (sel) {
       ext.setBounds(rb(model.get("extent"))); sel.setBounds(rb(b));
+      const whole = b.every((v, i) => Math.abs(v - model.get("extent")[i]) < 1e-6);  // nothing drawn yet: outline only
+      sel.setStyle({ opacity: whole ? 0 : 1, fillOpacity: whole ? 0 : 0.18 });
       pl.setLatLngs(poly.map(p => [p[1], p[0]]));
       (poly.length ? sel : pl).remove(); (poly.length ? pl : sel).addTo(map);
     }
@@ -589,7 +605,7 @@ async function render({ model, el }) {
     const hasCloud = model.get("has_cloud");
     q("label.cc").style.display = hasCloud ? "" : "none";
     q(".stacsel-opts").style.display = hasCloud || sels.children.length ? "" : "none";
-    cc.value = cloud; q(".ccv").textContent = cloud >= 100 ? "any" : `\\u2264 ${cloud}%`;
+    cc.value = cloud; cc.style.setProperty("--p", cloud + "%"); q(".ccv").textContent = cloud >= 100 ? "any" : `\\u2264 ${cloud}%`;
     sels.querySelectorAll("select").forEach(s => { s.value = flt[s.dataset.k] || ""; });
     const query = {};
     if (cloud < 100) query["eo:cloud_cover"] = { lte: cloud };
@@ -597,7 +613,7 @@ async function render({ model, el }) {
     const where = poly.length
       ? `intersects={"type": "Polygon", "coordinates": [[${poly.concat([poly[0]]).map(pt).join(", ")}]]}`
       : `bbox=${pt(b)}`;
-    code.textContent = `search(\\n  ${where},\\n  datetime="${d0.value}/${d1.value}",${Object.keys(query).length ? `\\n  query=${JSON.stringify(query)},` : ""}\\n)`;
+    code.textContent = `search(\\n  ${where},\\n  datetime="${d0.value}/${d1.value}",${Object.keys(query).length ? `\\n  query=${JSON.stringify(query).replace(/":/g, '": ').replace(/,"/g, ', "')},` : ""}\\n)`;
   }
   const setDate = (k, v) => { model.set(k, v); model.save_changes(); draw(); };
   d0.addEventListener("change", () => setDate("start", d0.value));
@@ -611,11 +627,20 @@ async function render({ model, el }) {
     n ? setRange(ymd(Math.max(ms(mx) - n * DAY, ms(mn))), mx) : setRange(model.get("min_date"), mx);
   }));
   cc.addEventListener("input", () => setDate("cloud_cover", +cc.value));
+  const cp = q(".stacsel-cp");
+  cp.innerHTML = COPY;
+  cp.addEventListener("click", async () => {
+    const s = code.textContent;
+    try { await navigator.clipboard.writeText(s); } catch {  // clipboard API can be blocked (e.g. VS Code output iframes)
+      const t = document.createElement("textarea"); t.value = s; el.append(t); t.select(); document.execCommand("copy"); t.remove(); }
+    cp.innerHTML = CHECK; cp.classList.add("ok");
+    setTimeout(() => { cp.innerHTML = COPY; cp.classList.remove("ok"); }, 1200);
+  });
   function buildSels() {  // one <select> per filter option
     sels.innerHTML = "";
     for (const [k, vals] of Object.entries(model.get("filter_options"))) {
       const lab = document.createElement("label"), s = document.createElement("select");
-      lab.append(k.split(":").pop(), s); s.dataset.k = k;
+      lab.append(k.split(":").pop().replace(/_/g, " "), s); s.dataset.k = k;
       for (const v of ["", ...vals]) s.add(new Option(v || "any", v));
       s.addEventListener("change", () => {
         const f = { ...model.get("filters") };
@@ -640,7 +665,10 @@ async function render({ model, el }) {
   const tmp = L.layerGroup().addTo(map), rubber = L.polyline([], { ...none, color: ACC, weight: 1.5, dashArray: "4 3" });
   draw();
   let fitted = false;
-  const fit = () => { fitView(map, mapEl, ext.getBounds(), [10, 10]); fitted = true; };
+  const fit = () => {  // open on the current selection when one was drawn, else the whole extent
+    const drawn = model.get("polygon").length ? pl : sel.options.opacity ? sel : ext;
+    fitView(map, mapEl, drawn.getBounds(), drawn === ext ? [10, 10] : [40, 40]); fitted = true;
+  };
   if (mapEl.clientWidth > 0) fit();  // zero-size (hidden) containers would zoom to max, so wait for a size
   const ro = new ResizeObserver(() => { map.invalidateSize(); if (!fitted && mapEl.clientWidth > 0) fit(); });
   ro.observe(mapEl);
@@ -698,8 +726,8 @@ export default { render };
 
 _WIDGET_CSS = _ROOT + """
 .stacsel .sg{display:grid;grid-template-columns:minmax(0,3fr) minmax(0,2fr);gap:20px}
-@container (max-width:720px){.stacsel .sg{grid-template-columns:minmax(0,1fr)}}
-.stacsel-map{aspect-ratio:16/10;min-height:240px;border:1px solid var(--sv-border);border-radius:3px;position:relative}
+.stacsel-map{min-height:340px;border:1px solid var(--sv-border);border-radius:3px;position:relative}
+@container (max-width:720px){.stacsel .sg{grid-template-columns:minmax(0,1fr)}.stacsel-map{aspect-ratio:16/10;min-height:240px}}
 .stacsel-tools{position:absolute;z-index:500;top:10px;left:54px;right:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;pointer-events:none}
 .stacsel-tools>*{pointer-events:auto}
 .stacsel-hint{font-size:11px;color:var(--sv-muted);background:color-mix(in srgb,var(--sv-bg) 85%,transparent);padding:2px 6px;border-radius:3px;pointer-events:none}
@@ -725,9 +753,23 @@ _WIDGET_CSS = _ROOT + """
   margin-top:2px;border-radius:50%;background:var(--sv-bg);border:2px solid var(--sv-accent);cursor:pointer}
 .stacsel-sl input::-moz-range-thumb{pointer-events:auto;box-sizing:border-box;width:14px;height:14px;
   border-radius:50%;background:var(--sv-bg);border:2px solid var(--sv-accent);cursor:pointer}
-.stacsel-tk{display:flex;justify-content:space-between;font-size:11px;color:var(--sv-faint)}
-.stacsel-pre{margin-top:8px}
-.stacsel-opts label.cc{flex:1 1 180px}.stacsel-opts input.cc{accent-color:var(--sv-accent);margin:4px 0 0}
+.stacsel-tk{display:flex;justify-content:space-between;font-size:11px;color:var(--sv-faint);margin-top:2px}
+.stacsel-pre{margin-top:12px}
+.stacsel-opts label.cc{flex:1 1 180px}
+.stacsel input.cc{-webkit-appearance:none;appearance:none;width:100%;height:18px;margin:4px 0 5px;padding:0;background:none;cursor:pointer}
+.stacsel input.cc::-webkit-slider-runnable-track{height:4px;border-radius:2px;
+  background:linear-gradient(to right,var(--sv-accent) var(--p,100%),var(--sv-alt) var(--p,100%))}
+.stacsel input.cc::-moz-range-track{height:4px;border-radius:2px;background:var(--sv-alt)}
+.stacsel input.cc::-moz-range-progress{height:4px;border-radius:2px;background:var(--sv-accent)}
+.stacsel input.cc::-webkit-slider-thumb{-webkit-appearance:none;box-sizing:border-box;width:14px;height:14px;margin-top:-5px;
+  border-radius:50%;background:var(--sv-bg);border:2px solid var(--sv-accent)}
+.stacsel input.cc::-moz-range-thumb{box-sizing:border-box;width:14px;height:14px;border-radius:50%;background:var(--sv-bg);border:2px solid var(--sv-accent)}
+.stacsel input.cc:focus-visible{outline:none}.stacsel input.cc:focus-visible::-webkit-slider-thumb{box-shadow:0 0 0 3px color-mix(in srgb,var(--sv-accent) 30%,transparent)}
+.stacsel-cw{position:relative}
+.stacsel-cp{position:absolute;top:6px;right:6px;display:inline-flex;padding:4px;border:1px solid var(--sv-border);border-radius:3px;
+  background:var(--sv-bg);color:var(--sv-muted);cursor:pointer;opacity:.7}
+.stacsel-cp svg{width:14px;height:14px}.stacsel-cw:hover .stacsel-cp,.stacsel-cp:focus-visible{opacity:1}
+.stacsel-cp:hover,.stacsel-cp.ok{color:var(--sv-accent);border-color:var(--sv-accent)}
 .stacsel-sels{display:contents}
 .stacsel-err{color:var(--sv-err);font-size:12px;margin-top:6px}.stacsel-err:empty{display:none}
 .stacsel-code{margin:0;padding:8px 10px;background:var(--sv-code-bg);border:1px solid var(--sv-border);border-radius:2px;
@@ -1027,6 +1069,18 @@ inp.oninput = () => {
   for (const r of rows) { const on = terms.every(t => r.dataset.q.includes(t)); r.hidden = !on; n += on; }
   count.textContent = terms.length ? n + " of " + rows.length : "";
 };
+inp.onkeydown = e => { if (e.key === "Escape" && inp.value) { inp.value = ""; inp.oninput(); } };
+const copy = s => navigator.clipboard ? navigator.clipboard.writeText(s) : Promise.reject();
+const fallback = s => {  // clipboard API can be blocked (e.g. VS Code output iframes)
+  const t = document.createElement("textarea"); t.value = s; el.append(t); t.select(); document.execCommand("copy"); t.remove(); };
+for (const b of el.querySelectorAll(".cp")) {
+  b.hidden = false;
+  b.onclick = async () => {
+    try { await copy(b.dataset.id); } catch { fallback(b.dataset.id); }
+    const svg = b.innerHTML; b.innerHTML = CHECK; b.classList.add("ok");
+    setTimeout(() => { b.innerHTML = svg; b.classList.remove("ok"); }, 1200);
+  };
+}
 // styled hover card instead of the native title tooltip (kept as the no-JS fallback)
 const tip = document.createElement("div"), tb = document.createElement("b"), td = document.createElement("div");
 const im = document.createElement("img");
@@ -1034,12 +1088,25 @@ tip.className = "tip"; tip.hidden = true; tip.append(im, tb, td); el.append(tip)
 let last;  // last mouse event, to re-place the card once the image size is known
 im.onload = () => last && place(last);
 im.onerror = () => { im.hidden = true; };
+const view = () => {  // visible area: the window cut by every clipping ancestor (e.g. the notebook's scroll panel)
+  let v = { top: 0, left: 0, right: innerWidth, bottom: innerHeight };
+  for (let p = el.parentElement; p; p = p.parentElement) {
+    const s = getComputedStyle(p);
+    if (/auto|scroll|hidden|clip/.test(s.overflowY + s.overflowX)) {
+      const b = p.getBoundingClientRect();
+      v = { top: Math.max(v.top, b.top), left: Math.max(v.left, b.left), right: Math.min(v.right, b.right), bottom: Math.min(v.bottom, b.bottom) };
+    }
+  }
+  return v;
+};
 const place = e => {
   last = e;
-  const r = tip.getBoundingClientRect(), x = e.clientX + 14, y = e.clientY + 14;
-  const o = el.getBoundingClientRect();  // the card is the containing block (container-type), not the viewport
-  tip.style.left = Math.min(x, innerWidth - r.width - 8) - o.left + "px";
-  tip.style.top = (y + r.height > innerHeight - 8 ? e.clientY - r.height - 10 : y) - o.top + "px";
+  const r = tip.getBoundingClientRect(), v = view(), o = el.getBoundingClientRect();  // the card is the containing block (container-type)
+  let x = e.clientX + 14, y = e.clientY + 14;
+  if (x + r.width > v.right - 8) x = Math.max(v.left + 8, v.right - r.width - 8);
+  if (y + r.height > v.bottom - 8) y = Math.max(v.top + 8, e.clientY - r.height - 10);  // flip above the cursor, never past the top
+  tip.style.left = x - o.left + "px";
+  tip.style.top = y - o.top + "px";
 };
 for (const r of rows) {
   const [t, ...d] = r.title.split("\\n\\n");
@@ -1102,8 +1169,9 @@ class Collections:
             head["url"] = href
         img = lambda v: f" data-img='{html.escape(u)}'" if (u := _col_thumb(v)) else ""
         rows = "".join(
-            f"<tr data-q='{html.escape(_search_text(k, v).lower())}' title='{html.escape(_tooltip(v))}'{img(v)}><td class='id'>{html.escape(k)}</td>"
-            f"<td class='m'>{html.escape(v._title or '')}</td></tr>"
+            f"<tr data-q='{html.escape(_search_text(k, v).lower())}' title='{html.escape(_tooltip(v))}'{img(v)}>"
+            f"<td class='ti'>{html.escape(v._title or '')}</td><td class='id'>{html.escape(k)}"
+            f"<button type='button' class='cp' data-id='{html.escape(k)}' aria-label='Copy id' hidden>{_COPY_SVG}</button></td></tr>"
             for k, v in self._by_attr.items()
         )
         uid = f"stacq-{uuid.uuid4().hex}"
@@ -1111,9 +1179,9 @@ class Collections:
             f"{_CSS}<div class='sc' id='{uid}'><div class='hd'><span class='ty'>{'STAC API' if api else 'STAC catalog'}</span>"
             f"<span class='tt'>{html.escape(title)}</span><span class='mt'>{n} collections</span></div>"
             f"{_desc_html(getattr(cat, 'description', None))}<div style='margin-top:10px'>{_table(head)}</div>"
-            f"<div class='q' hidden><input type='search' placeholder='Search collections (id, title, keywords, description)'>"
+            f"<div class='q' hidden>{_SEARCH_SVG}<input type='search' placeholder='Filter by title, id, keyword or description'>"
             f"<span class='m'></span></div><div class='il ovl'><table class='tb ov'><tbody>{rows}</tbody></table></div></div>"
-            f"<script>(()=>{{const id={_json(uid)};{_FILTER_JS}}})()</script>"
+            f"<script>(()=>{{const id={_json(uid)},CHECK={_json(_CHECK_SVG)};{_FILTER_JS}}})()</script>"
         )
 
 
