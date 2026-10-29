@@ -97,6 +97,14 @@ def _day(d: dt.datetime | None) -> str:
     return d.strftime("%Y-%m-%d") if d else ""
 
 
+def _day_time(d: dt.datetime | None) -> str:
+    """'YYYY-MM-DD HH:MM' in UTC; just the day when the time is midnight (date-only items)."""
+    if not d:
+        return ""
+    d = d.replace(tzinfo=_UTC) if d.tzinfo is None else d.astimezone(_UTC)
+    return _day(d) if d.time() == dt.time() else d.strftime("%Y-%m-%d %H:%M")
+
+
 def _stamp(d: dt.datetime) -> str:
     """'YYYY-MM-DD HH:MM:SS UTC' (naive datetimes are taken as UTC)."""
     d = d.replace(tzinfo=_UTC) if d.tzinfo is None else d.astimezone(_UTC)
@@ -1109,7 +1117,7 @@ class Items(pystac.ItemCollection):
         note = "max_items reached: results may be truncated" if n and n == self._limit else ""
         rng = f"{_day(min(los))} &rarr; {_day(max(his))}" if los else ""
         bboxes = [i.bbox for i in items[:500] if i.bbox]
-        when = lambda i, lo, hi: _day(lo) if i.datetime else f"{_day(lo)} to {_day(hi)}"
+        when = lambda i, lo, hi: _day_time(lo) if i.datetime else f"{_day_time(lo)} to {_day_time(hi)}"
         feats, rows = [], ""
         for k, (i, (lo, hi)) in enumerate(zip(items[:500], spans)):
             if not i.geometry:
