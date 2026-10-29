@@ -146,3 +146,169 @@ def test_collection_open_zarr(tmp_path):
     col.add_asset("cube", pystac.Asset(str(tmp_path / "c.zarr"), media_type="application/vnd+zarr", roles=["data"]))
     ds = stac_viewer.CollectionView(col, None).open()
     assert list(ds.t.values) == [0, 1, 2]
+
+
+def test_resolve_and_options():
+    it = item_with("a", D(2020), nc=("a.nc", None), odd=("a.xyz", None))
+    it.assets["meta"] = pystac.Asset("m.json")
+    assert openers.resolve([it]) == ("netcdf", ["nc"])
+    assert openers.resolve([it], "nc", "zarr") == ("zarr", ["nc"])
+    with pytest.raises(ValueError, match="unknown opener"):
+        openers.resolve([it], opener="nope")
+    opts = {o["key"]: o for o in openers.options([it, it])}
+    assert list(opts) == ["nc", "odd", "meta"]
+    assert opts["nc"]["opener"] == "netcdf" and opts["nc"]["data"] and opts["nc"]["label"].startswith("nc (")
+    assert opts["odd"]["opener"] is None and not opts["meta"]["data"]
+
+
+def cog_item(id, asset_extra=None, **props):
+    it = item_with(id, D(2020), red=("r.tif", "image/tiff"), nir=("n.tif", "image/tiff"))
+    it.assets["red"].extra_fields.update(asset_extra or {})
+    it.properties.update(props)
+    return it
+
+
+def test_cog_params_crs_majority():
+    items = [
+        cog_item("a", {"proj:code": "EPSG:32633"}),
+        cog_item("b", **{"proj:code": "EPSG:32633"}),
+        cog_item("c", **{"proj:epsg": 32632}),
+        cog_item("d", {"proj:epsg": 32632}),
+        cog_item("e", **{"proj:epsg": 32633}),
+    ]
+    p = openers.opener_params("cog", items, ["red"])
+    assert p["crs"] == {"kind": "str", "default": "EPSG:32633", "inferred": True}
+    assert p["resampling"]["default"] == "nearest" and p["resampling"]["kind"] == "choice"
+    assert p["groupby"]["choices"] == ["time", "solar_day", "id"] and p["groupby"]["default"] == "time"
+    none = openers.opener_params("cog", [cog_item("x")], ["red"])
+    assert none["crs"]["default"] is None and none["resolution"] == {"kind": "float", "default": None, "inferred": True}
+
+
+def test_cog_params_resolution():
+    band = {"raster:bands": [{"spatial_resolution": 20}]}
+    a = cog_item("a", band, gsd=10, **{"proj:transform": [5, 0, 0, 0, -5, 0]})
+    assert openers.opener_params("cog", [a], ["red"])["resolution"]["default"] == 20.0
+    b = cog_item("b", gsd=10, **{"proj:transform": [5, 0, 0, 0, -5, 0]})
+    assert openers.opener_params("cog", [b], ["red"])["resolution"]["default"] == 10.0
+    c = cog_item("c", {"proj:transform": [-30, 0, 0, 0, 30, 0]})
+    assert openers.opener_params("cog", [c], ["red"])["resolution"]["default"] == 30.0
+    c.assets["nir"].extra_fields["gsd"] = 10
+    assert openers.opener_params("cog", [c], ["red", "nir"])["resolution"]["default"] == 10.0  # finest wins
+
+
+def test_custom_opener_params():
+    def boom(items, assets):
+        raise RuntimeError
+
+    @stac_viewer.register_opener(
+        "mine",
+        media_types=["application/x-foo"],
+        params={
+            "n": openers.Param(int, lambda items, assets: len(items) + len(assets)),
+            "bad": openers.Param(float, boom),
+            "mode": openers.Param(("a", "b"), "b"),
+        },
+    )
+    def mine(items, assets, **kw):
+        return xr.Dataset()
+
+    it = item_with("a", D(2020), d=("x.foo", "application/x-foo"))
+    assert openers.opener_params("mine", [it], ["d"]) == {
+        "n": {"kind": "int", "default": 2, "inferred": True},
+        "bad": {"kind": "float", "default": None, "inferred": True},
+        "mode": {"kind": "choice", "choices": ["a", "b"], "default": "b", "inferred": False},
+    }
+    assert openers.opener_params("netcdf", [it], ["d"]) == {}
+    with pytest.raises(ValueError, match="unknown opener"):
+        openers.opener_params("nope", [it], ["d"])
+
+
+def test_geoparquet_columns_string(tmp_path):
+    pytest.importorskip("pyarrow")
+    p = tmp_path / "t.parquet"
+    pd.DataFrame({"a": [1], "b": [2], "c": [3]}).to_parquet(p)
+    it = Items([item_with("p", D(2020), d=(str(p), "application/vnd.apache.parquet"))])
+    assert list(it.open(columns="a, c,").columns) == ["a", "c"]
+    assert list(it.open(columns=["b"]).columns) == ["b"]
+    assert list(it.open(columns="").columns) == ["a", "b", "c"]
+    assert list(it.open(columns=None).columns) == ["a", "b", "c"]
+
+
+def cog_items():
+    its = [cog_item(i, {"proj:code": "EPSG:32633"}, gsd=10) for i in "ab"]
+    for it in its:
+        it.add_asset("nc", pystac.Asset("x.nc", media_type="application/x-netcdf"))
+        it.add_asset("odd", pystac.Asset("x.xyz"))
+    return Items(its)
+
+
+def test_open_settings_defaults_and_code():
+    w = cog_items().open_settings()
+    assert w.assets == ["red", "nir"] and w.opener == "cog" and w.error == ""
+    assert [(o["key"], o["opener"]) for o in w.asset_options] == [("red", "cog"), ("nir", "cog"), ("nc", "netcdf"), ("odd", None)]
+    assert w.values == {"crs": "EPSG:32633", "resolution": 10.0, "resampling": "nearest", "groupby": "time"}
+    assert w.kwargs() == {"crs": "EPSG:32633", "resolution": 10.0}  # inferred pinned, static defaults omitted
+    assert w.code == "open(\n  assets=['red', 'nir'],\n  crs='EPSG:32633',\n  resolution=10.0,\n)"
+    w.values = {**w.values, "groupby": "solar_day", "resolution": "20"}
+    assert w.kwargs() == {"crs": "EPSG:32633", "resolution": 20.0, "groupby": "solar_day"}
+    assert "groupby='solar_day'" in w.code and "resolution=20.0" in w.code
+    w.values = {**w.values, "crs": ""}
+    assert "crs" not in w.kwargs()
+    w.values = {**w.values, "resolution": "abc"}
+    assert "resolution" in w.error
+
+
+def test_open_settings_switch_opener_and_keep_edits():
+    w = cog_items().open_settings()
+    w.values = {**w.values, "resampling": "cubic"}
+    w.assets = ["red"]  # same opener: edits kept, inferred values recomputed
+    assert w.values["resampling"] == "cubic" and w.values["crs"] == "EPSG:32633"
+    w.assets = ["nc"]
+    assert w.opener == "netcdf" and w.params == {} and w.values == {}
+    assert w.code == "open(\n  assets=['nc'],\n)"
+    w.assets = ["red", "nir"]
+    assert w.opener == "cog" and w.values["resampling"] == "nearest"
+    w.assets = ["red", "nc"]  # mixed openers: error, previous state kept
+    assert "different openers" in w.error and w.opener == "cog"
+    w.assets = []
+    assert w.opener == "" and w.code == "" and w.error == ""
+
+
+def test_open_with_settings_widget():
+    seen = {}
+
+    @stac_viewer.register_opener("cap", media_types=["application/x-cap"], params={"n": openers.Param(int, lambda i, a: 3)})
+    def cap(items, assets, **kw):
+        seen.update(assets=assets, **kw)
+        return xr.Dataset()
+
+    it = Items([item_with("a", D(2020), d=(("x.cap"), "application/x-cap"))])
+    w = it.open_settings()
+    assert w.opener == "cap" and w.kwargs() == {"n": 3}
+    it.open(w, extra=1, n=5)
+    assert seen == {"assets": ["d"], "n": 5, "extra": 1}
+    seen.clear()
+    it.open("d")
+    assert seen == {"assets": ["d"]}
+
+
+def test_collection_open_settings():
+    col = make_collection("c")
+    col.add_asset("cube", pystac.Asset("c.zarr", media_type="application/vnd+zarr", roles=["data"]))
+    w = stac_viewer.CollectionView(col, None).open_settings()
+    assert w.assets == ["cube"] and w.opener == "zarr"
+    empty = stac_viewer.CollectionView(make_collection("e"), None).open_settings()
+    assert empty.assets == [] and "no openable" in empty.error
+
+
+def test_open_esm_syntax(tmp_path):
+    import shutil, subprocess
+
+    if not shutil.which("node"):
+        pytest.skip("node not installed")
+    from stac_viewer import core
+
+    for n, src in {"open": core._OPEN_ESM, "sel": core._ESM}.items():
+        f = tmp_path / f"{n}.mjs"
+        f.write_text(src)
+        subprocess.run(["node", "--check", str(f)], check=True)

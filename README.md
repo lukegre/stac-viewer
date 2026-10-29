@@ -35,6 +35,10 @@ ds = col.open("zarr-https")                                       # collection-l
 ds = items.open("data", opener="netcdf")                          # force an opener
 ```
 
+In a notebook, `w = items.open_settings(); w` shows the assets grouped by opener and the opener's settings (e.g.
+`crs`, `resolution` for COGs, pre-filled from the items) with the equivalent call to copy; `items.open(w)` uses them.
+Explicit kwargs win, as with `col.search(sel)`.
+
 | opener | media types / extensions | backend | several items |
 |---|---|---|---|
 | `cog` | `image/tiff…`, `.tif` | `odc.stac.load` (lazy, `chunks={}`) | stacked along time |

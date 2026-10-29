@@ -43,6 +43,7 @@ from pystac_client.collection_client import CollectionClient
 from pystac_client.conformance import ConformanceClasses
 from pystac_client.exceptions import APIError
 
+from . import openers as _openers
 from .openers import open_assets
 
 try:  # optional: interactive selector
@@ -52,7 +53,7 @@ except ImportError:  # pragma: no cover
     anywidget = None
     traitlets = None
 
-__all__ = ["browse", "Collections", "CollectionView", "Items", "SearchSelector"]
+__all__ = ["browse", "Collections", "CollectionView", "Items", "SearchSelector", "OpenSettings"]
 
 _LAND = files("stac_viewer").joinpath("land.txt").read_text()  # SVG path, 0..360 x 0..180 (x=lon+180, y=90-lat)
 _UTC = dt.timezone.utc
@@ -439,14 +440,16 @@ _LEAF_CSS = "".join(":is(.sc,.stacsel) " + r + "\n" for r in [
     ".leaflet-container a.leaflet-popup-close-button{color:var(--sv-muted)}.leaflet-popup-content a{color:var(--sv-accent)}",
     ".leaflet-tooltip{background:var(--sv-bg);color:var(--sv-fg);border-color:var(--sv-border-strong);box-shadow:none}",
 ])
-_LEAFLET_JS = (f"const TILE = {json.dumps(_TILE)}, TILE_ATTR = {json.dumps(_TILE_ATTR)}, TILE_MAX = 16, LEAF_CSS = {json.dumps(_LEAF_CSS)};\n"
-               + """
-const LEAF = "https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/";
-const tok = (el, n, d) => getComputedStyle(el).getPropertyValue(n).trim() || d;  // theme token as a concrete colour
+_DARK_JS = """
 const isDark = el => {  // light text => dark theme (JupyterLab, VS Code and Colab all set the text colour)
   const [r, g, b] = (getComputedStyle(el).color.match(/[\\d.]+/g) || []).map(Number);
   return 0.2126 * r + 0.7152 * g + 0.0722 * b > 128;
 };
+"""
+_LEAFLET_JS = (f"const TILE = {json.dumps(_TILE)}, TILE_ATTR = {json.dumps(_TILE_ATTR)}, TILE_MAX = 16, LEAF_CSS = {json.dumps(_LEAF_CSS)};\n"
+               + _DARK_JS + """
+const LEAF = "https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/";
+const tok = (el, n, d) => getComputedStyle(el).getPropertyValue(n).trim() || d;  // theme token as a concrete colour
 async function leaflet() {  // CSS link once per page; dynamic import avoids RequireJS clashes
   if (!document.getElementById("stacmap-css")) {
     const l = document.createElement("link");
@@ -578,7 +581,19 @@ _CHECK_SVG = _ICON.format("<path d='M3 8.5 6.5 12 13 4.5'/>")
 
 
 # ------------------------------------------------------------ interactive selector
-_ESM = _LEAFLET_JS + f"const COPY = {json.dumps(_COPY_SVG)}, CHECK = {json.dumps(_CHECK_SVG)};" + """
+_COPY_JS = f"const COPY = {json.dumps(_COPY_SVG)}, CHECK = {json.dumps(_CHECK_SVG)};" + """
+function copyBtn(el, cp, text) {  // copy button for a code block; text() gives the current code
+  cp.innerHTML = COPY;
+  cp.addEventListener("click", async () => {
+    const s = text();
+    try { await navigator.clipboard.writeText(s); } catch {  // clipboard API can be blocked (e.g. VS Code output iframes)
+      const t = document.createElement("textarea"); t.value = s; el.append(t); t.select(); document.execCommand("copy"); t.remove(); }
+    cp.innerHTML = CHECK; cp.classList.add("ok");
+    setTimeout(() => { cp.innerHTML = COPY; cp.classList.remove("ok"); }, 1200);
+  });
+}
+"""
+_ESM = _LEAFLET_JS + _COPY_JS + """
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const DAY = 864e5, ms = s => Date.parse(s), ymd = t => new Date(t).toISOString().slice(0, 10);  // UTC day strings
 const rb = b => [[b[1], b[0]], [b[3], b[2]]];  // [w, s, e, n] -> Leaflet bounds
@@ -694,14 +709,7 @@ async function render({ model, el }) {
   }));
   cc.addEventListener("input", () => setDate("cloud_cover", +cc.value));
   const cp = q(".stacsel-cp");
-  cp.innerHTML = COPY;
-  cp.addEventListener("click", async () => {
-    const s = code.textContent;
-    try { await navigator.clipboard.writeText(s); } catch {  // clipboard API can be blocked (e.g. VS Code output iframes)
-      const t = document.createElement("textarea"); t.value = s; el.append(t); t.select(); document.execCommand("copy"); t.remove(); }
-    cp.innerHTML = CHECK; cp.classList.add("ok");
-    setTimeout(() => { cp.innerHTML = COPY; cp.classList.remove("ok"); }, 1200);
-  });
+  copyBtn(el, cp, () => code.textContent);
   function buildSels() {  // one <select> per filter option
     sels.innerHTML = "";
     for (const [k, vals] of Object.entries(model.get("filter_options"))) {
@@ -790,6 +798,74 @@ async function render({ model, el }) {
 export default { render };
 """
 
+_OPEN_ESM = _COPY_JS + _DARK_JS + """
+function render({ model, el }) {
+  el.classList.add("stacsel");
+  el.style.colorScheme = isDark(el) ? "dark" : "light";
+  el.innerHTML = `
+    <div class="stacsel-panel">
+      <div><p class="lbl">Assets</p><div class="stacsel-assets"></div></div>
+      <div class="stacsel-pars"><p class="lbl">Settings</p><div class="stacsel-row"></div></div>
+      <div><p class="lbl">Open call</p><div class="stacsel-cw"><pre class="stacsel-code"></pre>
+        <button type="button" class="stacsel-cp" aria-label="Copy open call"></button></div>
+        <div class="stacsel-err"></div></div>
+    </div>`;
+  const q = s => el.querySelector(s);
+  const list = q(".stacsel-assets"), row = q(".stacsel-pars .stacsel-row"), code = q(".stacsel-code"), err = q(".stacsel-err");
+  const setAssets = a => { model.set("assets", a); model.save_changes(); };
+  const setValue = (k, v) => { model.set("values", { ...model.get("values"), [k]: v }); model.save_changes(); };
+  function buildAssets() {  // one group per opener; assets without one are disabled
+    list.innerHTML = "";
+    const groups = {};
+    for (const o of model.get("asset_options")) (groups[o.opener || ""] ||= []).push(o);
+    for (const [name, opts] of Object.entries(groups)) {
+      const g = document.createElement("div"), h = document.createElement("div");
+      g.className = "stacsel-grp"; h.className = "stacsel-gh"; h.textContent = name || "no opener"; g.append(h);
+      for (const o of opts) {
+        const lab = document.createElement("label"), cb = document.createElement("input");
+        cb.type = "checkbox"; cb.value = o.key; cb.disabled = !name;
+        cb.addEventListener("change", () => {
+          const cur = model.get("assets"), same = name === model.get("opener");
+          const next = !cb.checked ? cur.filter(k => k !== o.key) : same ? [...cur, o.key] : [o.key];  // a new opener replaces the selection
+          setAssets(model.get("asset_options").map(a => a.key).filter(k => next.includes(k)));
+        });
+        lab.append(cb, o.label); g.append(lab);
+      }
+      list.append(g);
+    }
+    sync();
+  }
+  function buildPars() {  // one control per opener param
+    row.innerHTML = "";
+    for (const [k, p] of Object.entries(model.get("params"))) {
+      const lab = document.createElement("label"), inp = document.createElement(p.kind === "choice" ? "select" : "input");
+      inp.dataset.k = k; lab.append(k, inp);
+      if (p.kind === "choice") {
+        for (const c of p.default == null ? ["", ...p.choices] : p.choices) inp.add(new Option(c || "default", c));
+        inp.addEventListener("change", () => setValue(k, inp.value));
+      } else {
+        inp.type = p.kind === "str" ? "text" : "number"; inp.step = "any"; inp.placeholder = p.default ?? "";
+        inp.addEventListener("input", () => setValue(k, inp.value));
+      }
+      row.append(lab);
+    }
+    q(".stacsel-pars").style.display = row.children.length ? "" : "none";
+    sync();
+  }
+  function sync() {  // push model state into the controls (typing keeps its own value)
+    const sel = model.get("assets"), vals = model.get("values");
+    list.querySelectorAll("input").forEach(cb => { cb.checked = sel.includes(cb.value); });
+    row.querySelectorAll("[data-k]").forEach(inp => { if (inp !== document.activeElement) inp.value = vals[inp.dataset.k] ?? ""; });
+    code.textContent = model.get("code"); err.textContent = model.get("error");
+  }
+  copyBtn(el, q(".stacsel-cp"), () => code.textContent);
+  model.on("change:asset_options", buildAssets); model.on("change:params", buildPars);
+  for (const k of ["assets", "values", "code", "error"]) model.on("change:" + k, sync);
+  buildAssets(); buildPars();
+}
+export default { render };
+"""
+
 _WIDGET_CSS = _ROOT + """
 .stacsel .sg{display:grid;grid-template-columns:minmax(0,3fr) minmax(0,2fr);gap:20px}
 .stacsel-map{min-height:340px;border:1px solid var(--sv-border);border-radius:3px;position:relative}
@@ -804,8 +880,8 @@ _WIDGET_CSS = _ROOT + """
 .stacsel-panel{display:flex;flex-direction:column;gap:14px;min-width:0}
 .stacsel-row{display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap}
 .stacsel label{display:flex;flex-direction:column;gap:3px;font-size:11px;color:var(--sv-muted)}
-.stacsel input[type=date],.stacsel select{""" + _IN + """}
-.stacsel input[type=date]:focus,.stacsel select:focus{""" + _IN_FOCUS + """}
+.stacsel input[type=date],.stacsel input[type=text],.stacsel input[type=number],.stacsel select{""" + _IN + """}
+.stacsel input[type=date]:focus,.stacsel input[type=text]:focus,.stacsel input[type=number]:focus,.stacsel select:focus{""" + _IN_FOCUS + """}
 .stacsel input[type=date].bad{border-color:var(--sv-err)}
 .stacsel-row .stacsel-span{margin-left:auto;font-size:12px;color:var(--sv-muted);padding-bottom:5px;min-width:56px;text-align:right}
 .stacsel-sl{position:relative;height:18px;margin-top:12px}
@@ -837,6 +913,9 @@ _WIDGET_CSS = _ROOT + """
 .stacsel-cp svg{width:14px;height:14px}.stacsel-cw:hover .stacsel-cp,.stacsel-cp:focus-visible{opacity:1}
 .stacsel-cp:hover,.stacsel-cp.ok{color:var(--sv-accent);border-color:var(--sv-accent)}
 .stacsel-sels{display:contents}
+.stacsel-assets{display:flex;flex-wrap:wrap;gap:6px 24px}.stacsel-gh{font-size:11px;color:var(--sv-muted);margin-bottom:2px}
+.stacsel-assets label{flex-direction:row;align-items:center;gap:6px;font-size:12px;color:var(--sv-fg)}
+.stacsel-assets label:has(:disabled){color:var(--sv-faint)}
 .stacsel-err{color:var(--sv-err);font-size:12px;margin-top:6px}.stacsel-err:empty{display:none}
 .stacsel-code{margin:0;padding:8px 10px;background:var(--sv-code-bg);border:1px solid var(--sv-border);border-radius:2px;
   font:12px/1.5 var(--sv-mono);white-space:pre-wrap;overflow-wrap:anywhere;color:var(--sv-fg)}
@@ -861,11 +940,81 @@ if anywidget is not None:
         min_date = traitlets.Unicode("").tag(sync=True)
         max_date = traitlets.Unicode("").tag(sync=True)
 
+    class OpenSettings(anywidget.AnyWidget):
+        """Pick assets and opener settings; pass it to ``open(w)`` (explicit kwargs win)."""
+
+        _esm = _OPEN_ESM
+        _css = _WIDGET_CSS
+        asset_options = traitlets.List(traitlets.Dict()).tag(sync=True)  # [{key, label, opener, data}]
+        assets = traitlets.List(traitlets.Unicode()).tag(sync=True)  # selected keys
+        opener = traitlets.Unicode("").tag(sync=True)
+        params = traitlets.Dict({}).tag(sync=True)  # {name: {kind, choices?, default, inferred}}
+        values = traitlets.Dict({}).tag(sync=True)  # {name: current value}
+        code = traitlets.Unicode("").tag(sync=True)
+        error = traitlets.Unicode("").tag(sync=True)
+
+        def __init__(self, owners: list):
+            self._owners = list(owners)
+            super().__init__(asset_options=_openers.options(self._owners))
+            try:
+                self.assets = _openers.resolve(self._owners)[1]
+            except (ValueError, KeyError) as e:
+                self.error = str(e)
+
+        @traitlets.observe("assets")
+        def _assets_changed(self, _):
+            if not self.assets:
+                self.opener, self.params, self.values, self.error = "", {}, {}, ""
+                return self._sync_code()
+            try:
+                name, keys = _openers.resolve(self._owners, self.assets)
+                params = _openers.opener_params(name, self._owners, keys)
+            except (ValueError, KeyError) as e:
+                self.error = str(e)
+                return
+            old = self.params if name == self.opener else {}  # same opener: keep values the user edited
+            vals = {k: self.values.get(k) if k in old and self.values.get(k) != old[k]["default"] else p["default"]
+                    for k, p in params.items()}
+            self.error, self.opener, self.params, self.values = "", name, params, vals
+            self._sync_code()
+
+        @traitlets.observe("values")
+        def _sync_code(self, _=None):
+            try:
+                kw = self.kwargs()
+            except ValueError as e:
+                self.error = str(e)
+                return
+            self.error = ""
+            call = "".join(f"  {k}={v!r},\n" for k, v in {"assets": list(self.assets), **kw}.items())
+            self.code = f"open(\n{call})" if self.assets else ""
+
+        def kwargs(self) -> dict:
+            """Opener settings to pass to ``open``: set, and either inferred or changed from the default."""
+            out = {}
+            for k, p in self.params.items():
+                v = self.values.get(k)
+                if v is None or v == "":
+                    continue
+                try:
+                    v = {"float": float, "int": int}.get(p["kind"], lambda x: x)(v)
+                except ValueError:
+                    raise ValueError(f"{k}: expected {p['kind']}, got {v!r}") from None
+                if p["inferred"] or v != p["default"]:
+                    out[k] = v
+            return out
+
 else:
-    SearchSelector = None  # type: ignore[assignment,misc]
+    SearchSelector = OpenSettings = None  # type: ignore[assignment,misc]
 
 
 # ----------------------------------------------------------------- public classes
+def _open(owners: list, assets, opener, kwargs: dict):
+    if OpenSettings is not None and isinstance(assets, OpenSettings):
+        assets, opener, kwargs = assets.assets, opener or assets.opener or None, {**assets.kwargs(), **kwargs}
+    return open_assets(owners, assets, opener, **kwargs)
+
+
 class Items(pystac.ItemCollection):
     """``pystac.ItemCollection`` with a notebook summary (count, map, first rows)."""
 
@@ -879,9 +1028,16 @@ class Items(pystac.ItemCollection):
     def open(self, assets=None, *, opener: str | None = None, **kwargs):
         """Open assets as an xarray Dataset or (Geo)DataFrame; default is all assets with role 'data'.
 
-        ``opener`` forces a registered opener by name; ``kwargs`` go to the backend.
+        ``opener`` forces a registered opener by name; ``kwargs`` go to the backend. ``assets`` may also be an
+        ``open_settings()`` widget: its selection and settings are used, explicit arguments win.
         """
-        return open_assets(list(self.items), assets, opener, **kwargs)
+        return _open(list(self.items), assets, opener, kwargs)
+
+    def open_settings(self):
+        """Return an interactive asset/opener-settings picker (show it, then pass it to ``open(w)``)."""
+        if OpenSettings is None:
+            raise ImportError("open_settings() needs anywidget: pip install anywidget")
+        return OpenSettings(list(self.items))
 
     def _repr_html_(self) -> str:
         items, n = self.items, len(self.items)
@@ -962,7 +1118,13 @@ class CollectionView:
 
     def open(self, assets=None, *, opener: str | None = None, **kwargs):
         """Open collection-level assets (default: those with role 'data'); see ``Items.open``."""
-        return open_assets([self._col], assets, opener, **kwargs)
+        return _open([self._col], assets, opener, kwargs)
+
+    def open_settings(self):
+        """Return an interactive asset/opener-settings picker for collection assets; see ``Items.open_settings``."""
+        if OpenSettings is None:
+            raise ImportError("open_settings() needs anywidget: pip install anywidget")
+        return OpenSettings([self._col])
 
     # ---- viewer
     def _repr_html_(self) -> str:

@@ -17,7 +17,8 @@ from __future__ import annotations
 import os
 import sys
 from importlib.metadata import entry_points
-from typing import Callable
+from collections import Counter
+from typing import Callable, NamedTuple
 from urllib.parse import urlparse
 
 import pystac
@@ -30,14 +31,22 @@ def _norm(t: str) -> str:
     return t.lower().replace(" ", "")
 
 
-def register_opener(name: str, media_types=(), extensions=()):
-    """Decorator registering ``f(items, assets, **kwargs)`` as opener ``name``."""
+class Param(NamedTuple):
+    """Opener setting: ``kind`` is ``str``/``float``/``int`` or a list of choices; ``default`` is a
+    value, None, or ``f(items, assets) -> value`` inferred from the selection."""
+
+    kind: object
+    default: object = None
+
+
+def register_opener(name: str, media_types=(), extensions=(), params: dict[str, Param] | None = None):
+    """Decorator registering ``f(items, assets, **kwargs)`` as opener ``name``; ``params`` declares its settings."""
 
     def deco(fn: Callable):
         _REGISTRY.pop(name, None)  # re-registering moves it to the end (highest priority)
         mt = [_norm(t) for t in media_types]
         _REGISTRY[name] = dict(
-            fn=fn, exact=set(mt), base={t.split(";")[0] for t in mt}, ext={e.lower() for e in extensions}
+            fn=fn, exact=set(mt), base={t.split(";")[0] for t in mt}, ext={e.lower() for e in extensions}, params=params or {}
         )
         return fn
 
@@ -83,13 +92,10 @@ def _coerce(out, name: str):
     raise TypeError(f"opener {name!r} returned {type(out).__name__}; expected xarray Dataset/DataArray or pandas DataFrame")
 
 
-def open_assets(owners: list, assets=None, opener: str | None = None, **kwargs):
-    """Resolve assets across ``owners`` to one opener and call it (see module docstring)."""
+def resolve(owners: list, assets=None, opener: str | None = None) -> tuple[str, list[str]]:
+    """Opener name and asset keys that :func:`open_assets` would use."""
     _load_plugins()
-    avail: dict[str, pystac.Asset] = {}
-    for o in owners:
-        for k, a in o.assets.items():
-            avail.setdefault(k, a)
+    avail = _avail(owners)
     listing = ", ".join(_fmt(k, a) for k, a in avail.items()) or "none"
     if assets is None:
         keys = [k for k, a in avail.items() if "data" in (a.roles or []) and (opener or _match(a))]
@@ -110,7 +116,48 @@ def open_assets(owners: list, assets=None, opener: str | None = None, **kwargs):
         opener = next(iter(names.values()))
     elif opener not in _REGISTRY:
         raise ValueError(f"unknown opener {opener!r}. Registered: {', '.join(_REGISTRY)}")
+    return opener, keys
+
+
+def open_assets(owners: list, assets=None, opener: str | None = None, **kwargs):
+    """Resolve assets across ``owners`` to one opener and call it (see module docstring)."""
+    opener, keys = resolve(owners, assets, opener)
     return _coerce(_REGISTRY[opener]["fn"](owners, keys, **kwargs), opener)
+
+
+def _avail(owners: list) -> dict[str, pystac.Asset]:
+    avail: dict[str, pystac.Asset] = {}
+    for o in owners:
+        for k, a in o.assets.items():
+            avail.setdefault(k, a)
+    return avail
+
+
+def options(owners: list) -> list[dict]:
+    """One entry per asset key: label, matched opener (or None) and whether it has the 'data' role."""
+    _load_plugins()
+    return [
+        dict(key=k, label=_fmt(k, a), opener=_match(a), data="data" in (a.roles or []))
+        for k, a in _avail(owners).items()
+    ]
+
+
+def opener_params(name: str, owners: list, assets: list[str]) -> dict[str, dict]:
+    """JSON-serialisable spec ``{kind, choices?, default, inferred}`` for each param of opener ``name``."""
+    _load_plugins()
+    if name not in _REGISTRY:
+        raise ValueError(f"unknown opener {name!r}. Registered: {', '.join(_REGISTRY)}")
+    out = {}
+    for pname, p in _REGISTRY[name]["params"].items():
+        d, inferred = p.default, callable(p.default)
+        if inferred:
+            try:
+                d = d(owners, assets)
+            except Exception:
+                d = None
+        spec = {"kind": "choice", "choices": list(p.kind)} if isinstance(p.kind, (list, tuple)) else {"kind": p.kind.__name__}
+        out[pname] = {**spec, "default": d, "inferred": inferred}
+    return out
 
 
 # ----------------------------------------------------------------- built-in openers
@@ -130,6 +177,42 @@ def _pairs(items: list, assets: list[str]):
     return [(i, i.assets[k]) for i in items for k in assets if k in i.assets]
 
 
+def _infer(items, assets, find):
+    """Values ``find(item, asset)`` returns (when not None) for each selected asset of each item."""
+    vals = [find(i, a) for i, a in _pairs(items, assets)]
+    return [v for v in vals if v is not None]
+
+
+def _first(item, asset, key):
+    """First of the asset's, then the item's ``key`` field that is set."""
+    for d in (asset.extra_fields, getattr(item, "properties", {})):
+        if d.get(key) is not None:
+            return d[key]
+
+
+def _infer_crs(items, assets):
+    def find(i, a):
+        if (code := _first(i, a, "proj:code")) is not None:
+            return str(code)
+        if (n := _first(i, a, "proj:epsg")) is not None:
+            return f"EPSG:{n}"
+
+    found = _infer(items, assets, find)
+    return Counter(found).most_common(1)[0][0] if found else None
+
+
+def _infer_resolution(items, assets):
+    def find(i, a):
+        bands = a.extra_fields.get("raster:bands") or [{}]
+        if (r := bands[0].get("spatial_resolution")) is not None or (r := _first(i, a, "gsd")) is not None:
+            return float(r)
+        if (t := _first(i, a, "proj:transform")) is not None:
+            return abs(float(t[0]))
+
+    found = _infer(items, assets, find)
+    return min(found) if found else None
+
+
 @register_opener(
     "cog",
     media_types=[
@@ -138,6 +221,12 @@ def _pairs(items: list, assets: list[str]):
         "image/tiff",
     ],
     extensions=[".tif", ".tiff"],
+    params={
+        "crs": Param(str, _infer_crs),
+        "resolution": Param(float, _infer_resolution),
+        "resampling": Param(["nearest", "bilinear", "cubic", "average", "mode", "min", "max"], "nearest"),
+        "groupby": Param(["time", "solar_day", "id"], "time"),  # odc.stac.load's default is "time"
+    },
 )
 def _open_cog(items, assets, **kwargs):
     odc = _need("odc.stac", "cog")
@@ -185,10 +274,14 @@ def _open_netcdf(items, assets, **kwargs):
     "geoparquet",
     media_types=["application/vnd.apache.parquet", "application/x-parquet"],
     extensions=[".parquet", ".geoparquet"],
+    params={"columns": Param(str)},  # comma-separated
 )
 def _open_geoparquet(items, assets, **kwargs):
     gpd = _need("geopandas", "parquet")
     pd = _need("pandas", "parquet")
+    if isinstance(cols := kwargs.pop("columns", None), str):
+        cols = [c.strip() for c in cols.split(",") if c.strip()]
+    kwargs |= {"columns": list(cols)} if cols else {}
     out = []
     for _, a in _pairs(items, assets):
         try:
