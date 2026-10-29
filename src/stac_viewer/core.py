@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import datetime as dt
 import html
+import itertools
 import json
 import keyword
 import math
@@ -31,7 +32,10 @@ from typing import Any, Iterator
 
 import pystac
 from pystac_client import Client
+from pystac_client._utils import call_modifier
+from pystac_client.collection_client import CollectionClient
 from pystac_client.conformance import ConformanceClasses
+from pystac_client.exceptions import APIError
 
 try:  # optional: interactive selector
     import anywidget
@@ -44,9 +48,22 @@ __all__ = ["browse", "Collections", "CollectionView", "Items", "SearchSelector"]
 
 _LAND = files("stac_viewer").joinpath("land.txt").read_text()  # SVG path, 0..360 x 0..180 (x=lon+180, y=90-lat)
 _UTC = dt.timezone.utc
+_PAGE_LIMIT = 1000  # /collections page size; servers cap it at their own maximum
 
 
 # --------------------------------------------------------------------------- helpers
+def _collection_pages(client: Client) -> Iterator[dict]:
+    """Raw ``/collections`` pages, asking for large pages to cut round trips."""
+    io, url = client._stac_io, client._collections_href()
+    pages = io.get_pages(url, parameters={"limit": _PAGE_LIMIT})
+    try:
+        first = next(pages, None)
+    except APIError:  # limit rejected: fall back to the server's default page size
+        pages = io.get_pages(url)
+        first = next(pages, None)
+    return itertools.chain([first] if first else [], pages)
+
+
 def _ident(raw: str, taken: set[str]) -> str:
     """Turn a STAC id into a unique, valid Python identifier."""
     key = re.sub(r"\W", "_", raw) or "_"
@@ -457,15 +474,33 @@ class Items(pystac.ItemCollection):
 
 
 class CollectionView:
-    """Wraps a ``pystac.Collection``: delegates attributes, adds viewer and search."""
+    """Wraps a ``pystac.Collection``: delegates attributes, adds viewer and search.
 
-    def __init__(self, collection: pystac.Collection, catalog: Any):
-        self._col = collection
+    ``collection`` may be the raw JSON dict from ``/collections``; it is then parsed
+    into a pystac object only on first use, so listing a large API stays cheap.
+    """
+
+    def __init__(self, collection: pystac.Collection | dict, catalog: Any):
+        if isinstance(collection, dict):
+            self._raw, self._parsed = collection, None
+            self._id, self._title = collection["id"], collection.get("title")
+        else:
+            self._raw, self._parsed = None, collection
+            self._id, self._title = collection.id, collection.title
         self._catalog = catalog
         self._selector = None
 
+    @property
+    def _col(self) -> pystac.Collection:
+        if self._parsed is None:
+            cat = self._catalog
+            self._parsed = CollectionClient.from_dict(self._raw, root=cat, modifier=cat.modifier)
+            call_modifier(cat.modifier, self._parsed)
+            self._raw = None
+        return self._parsed
+
     def __getattr__(self, name: str):
-        if name.startswith("__") or name in {"_col", "_catalog", "_selector"}:
+        if name.startswith("__") or name in {"_raw", "_parsed", "_id", "_title", "_catalog", "_selector"}:
             raise AttributeError(name)
         return getattr(self._col, name)
 
@@ -473,7 +508,7 @@ class CollectionView:
         return sorted(set(dir(type(self))) | set(dir(self._col)))
 
     def __repr__(self) -> str:
-        return f"<Collection {self._col.id}>"
+        return f"<Collection {self._id}>"
 
     # ---- viewer
     def _repr_html_(self) -> str:
@@ -559,11 +594,17 @@ class Collections:
         self._catalog = catalog
         self._by_attr: dict[str, CollectionView] = {}
         self._by_id: dict[str, CollectionView] = {}
-        cols = catalog.get_collections() if isinstance(catalog, Client) else catalog.get_all_collections()
+        if isinstance(catalog, Client) and catalog._supports_collections():
+            # raw JSON pages; CollectionView parses each one only when it is opened
+            cols = (c for page in _collection_pages(catalog) for c in page["collections"])
+        elif isinstance(catalog, Client):
+            cols = catalog.get_collections()
+        else:
+            cols = catalog.get_all_collections()
         for c in cols:
             view = CollectionView(c, catalog)
-            self._by_attr[_ident(c.id, set(self._by_attr))] = view
-            self._by_id[c.id] = view
+            self._by_attr[_ident(view._id, set(self._by_attr))] = view
+            self._by_id[view._id] = view
 
     def __getattr__(self, name: str) -> CollectionView:
         if name.startswith("__") or name in {"_catalog", "_by_attr", "_by_id"}:
@@ -586,11 +627,11 @@ class Collections:
         return list(self._by_attr) + [m for m in dir(type(self)) if not m.startswith("__")]
 
     def __repr__(self) -> str:
-        return "\n".join(f"{k}: {v._col.title or ''}" for k, v in self._by_attr.items())
+        return "\n".join(f"{k}: {v._title or ''}" for k, v in self._by_attr.items())
 
     def _repr_html_(self) -> str:
         rows = "".join(
-            f"<tr><td><b>{html.escape(k)}</b></td><td class='m'>{html.escape(v._col.title or '')}</td></tr>"
+            f"<tr><td><b>{html.escape(k)}</b></td><td class='m'>{html.escape(v._title or '')}</td></tr>"
             for k, v in self._by_attr.items()
         )
         return f"{_CSS}<div class='sc'><table>{rows}</table></div>"
