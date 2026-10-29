@@ -1,0 +1,23 @@
+[project]
+name = "stac-viewer"
+version = "0.1.0"
+description = "Browse STAC catalogs in notebooks: dot-notation collections, HTML viewers, bbox/date selector and search"
+readme = "README.md"
+authors = [
+    { name = "lukegre", email = "lukegre@gmail.com" }
+]
+requires-python = ">=3.10"
+dependencies = [
+    "pystac>=1.10",
+    "pystac-client>=0.8",
+]
+
+[project.optional-dependencies]
+widget = ["anywidget>=0.9"]
+
+[dependency-groups]
+dev = ["pytest", "anywidget", "ipykernel", "nbclient", "nbformat", "planetary-computer"]
+
+[build-system]
+requires = ["uv_build>=0.9.9,<0.10.0"]
+build-backend = "uv_build"
