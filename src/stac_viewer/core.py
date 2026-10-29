@@ -207,7 +207,8 @@ _CSS = """<style>
 .sc .bar>div{position:absolute;top:0;bottom:0;background:#3b82f6;border-radius:4px}
 .sc .nw{white-space:nowrap}
 .sc .row2{margin-top:8px}.sc .row2 .il{margin-top:8px}.sc .il table{width:100%}
-.sc .il{max-height:calc(16 * (1.4em + 2px));overflow:auto}.sc .il th{position:sticky;top:0;background:Canvas;text-align:left;font-weight:600}
+.sc .il{max-height:calc(16 * (1.4em + 2px));overflow:auto}.sc .il th{position:sticky;top:0;z-index:1;background:Canvas;text-align:left;font-weight:600}
+.sc .il td{text-align:left}
 .sc .il tr[data-i]{cursor:pointer}.sc .il tr.hov{background:rgba(59,130,246,.15)}
 .sc .il tr.selected{background:rgba(59,130,246,.3);box-shadow:inset 3px 0 #f97316;font-weight:600}
 .sc .pop{display:flex;gap:8px;align-items:flex-start}
