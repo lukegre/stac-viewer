@@ -7,10 +7,11 @@ app = marimo.App(width="medium", css_file="full_height.css")
 @app.cell
 def _():
     import marimo as mo
+    from xyzservices import providers as xyz
 
     from stac_viewer import browse
 
-    return browse, mo
+    return browse, mo, xyz
 
 
 @app.cell(hide_code=True)
@@ -54,7 +55,7 @@ def _(mo):
 
 @app.cell
 def _(bafu):
-    collection = bafu.ch_bafu_wald_lufttemperatur_juli_1981_2010
+    collection = bafu.ch_bafu_trockenheitswarnkarte
     collection
     return (collection,)
 
@@ -89,7 +90,6 @@ def _(mo):
 @app.cell
 def _(items, mo):
     _settings = items.open_settings()
-    _settings.set(resolution=100)
     settings = mo.ui.anywidget(_settings)
     settings
     return (settings,)
@@ -113,18 +113,12 @@ def _(mo):
 
 
 @app.cell
-def _(out):
-    _img = (
-        out["wald-lufttemperatur_juli_1981_2010_2056.tif"]
-        .squeeze()
-        .plot.imshow(aspect=2, size=6, cmap="Spectral_r", vmin=0, vmax=25)
+def _(out, xyz):
+    out.explore(
+        tiles=xyz.SwissFederalGeoportal.NationalMapGrey,
+        cmap="YlOrRd", 
+        column="warnlevel"
     )
-    _img.axes
-    return
-
-
-@app.cell
-def _():
     return
 
 

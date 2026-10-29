@@ -78,3 +78,13 @@ Extra keyword arguments to `browse` go to `pystac_client.Client.open`, e.g.
 
 `datetime` accepts `"a/b"`, `"a"`, open ends (`"../b"`), `datetime`/`date` objects, or a `(start, end)` tuple.
 `search()` returns `max_items=1000` items by default; pass `max_items=None` for no limit.
+
+## RenkuLab
+
+The repo builds as a RenkuLab code-based environment (`pyproject.toml` + `uv.lock`; the `dev` group pulls in
+the example dependencies).
+
+- **App** (public marimo gallery of `examples/*_marimo.py`): add an App launcher with "Create from code" pointing at
+  this repo. The `Procfile` starts `marimo run examples` on `$RENKU_SESSION_PORT`, bound to `0.0.0.0`.
+- **Session** (JupyterLab for the `.ipynb` examples): add a session launcher with "Create from code" and the
+  JupyterLab interface.

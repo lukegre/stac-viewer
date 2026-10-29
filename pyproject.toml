@@ -8,6 +8,7 @@ authors = [
 ]
 requires-python = ">=3.10"
 dependencies = [
+    "adlfs>=2026.8.0",
     "anywidget>=0.9",
     "odc-stac>=0.5.3",
     "openpyxl>=3.1.5",
@@ -21,12 +22,14 @@ cog = [
     "xarray>=2024.1",
 ]
 zarr = [
+    "cftime>=1.6",
     "fsspec>=2023.1",
     "xarray>=2024.1",
     "xpystac>=0.2",
     "zarr>=2.16",
 ]
 netcdf = [
+    "cftime>=1.6",
     "fsspec>=2023.1",
     "h5netcdf>=1.3",
     "xarray>=2024.1",
@@ -53,6 +56,7 @@ vis = [
 
 [dependency-groups]
 dev = [
+    "stac-viewer[open,vis]",
     "pytest",
     "ipykernel",
     "nbclient",

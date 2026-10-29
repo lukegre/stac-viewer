@@ -186,7 +186,32 @@ def _need(mod: str, extra: str):
 
 def _combine(dss: list):
     xr = _need("xarray", "open")
-    return dss[0] if len(dss) == 1 else xr.combine_by_coords(dss)
+    return _tag_lonlat(dss[0] if len(dss) == 1 else xr.combine_by_coords(dss))
+
+
+_LONLAT = {"X": ("lon", "degrees_east", "longitude"), "Y": ("lat", "degrees_north", "latitude")}
+
+
+def _tag_lonlat(ds):
+    """Give lon/lat dimension coords CF ``axis``/``standard_name`` attrs so rioxarray finds them,
+    and EPSG:4326 when there is no CRS (if rioxarray is installed)."""
+    tagged = set()
+    for axis, (name, units, standard_name) in _LONLAT.items():
+        for dim in ds.dims:
+            c = ds.coords.get(dim)
+            if c is None or (dim != name and c.attrs.get("units") != units):
+                continue
+            c.attrs.setdefault("axis", axis)
+            c.attrs.setdefault("standard_name", standard_name)
+            tagged.add(axis)
+    if tagged == {"X", "Y"}:
+        try:
+            import rioxarray  # noqa: F401
+        except ImportError:
+            return ds
+        if ds.rio.crs is None:
+            ds = ds.rio.write_crs("EPSG:4326")
+    return ds
 
 
 def _pairs(items: list, assets: list[str]):
