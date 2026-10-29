@@ -82,6 +82,64 @@ def test_geoparquet(tmp_path):
     assert type(Items([it(2, plain)]).open()) is pd.DataFrame
 
 
+def test_filegdb_zip(tmp_path):
+    gpd = pytest.importorskip("geopandas")
+    pytest.importorskip("pyogrio")
+    import shutil
+    from shapely.geometry import Point
+
+    g = gpd.GeoDataFrame({"a": [1.0, 2.0]}, geometry=[Point(0, 0), Point(1, 1)], crs=4326)
+    gpd.GeoDataFrame({"s": ["ok"]}).to_file(tmp_path / "t.gdb", layer="meta", driver="OpenFileGDB")  # no geometry
+    g.to_file(tmp_path / "t.gdb", layer="pts", driver="OpenFileGDB")
+    g.iloc[:1].to_file(tmp_path / "t.gdb", layer="one", driver="OpenFileGDB")
+    shutil.make_archive(str(tmp_path / "t.gdb"), "zip", root_dir=tmp_path, base_dir="t.gdb")
+    it = item_with("g", D(2020), d=(str(tmp_path / "t.gdb.zip"), "application/zip"))
+    df = Items([it]).open(layer="one")
+    assert isinstance(df, gpd.GeoDataFrame) and len(df) == 1
+    assert len(Items([it]).open()) == 2  # default: first layer with geometry, not GDAL's first layer
+    spec = openers.opener_params("filegdb", [it], ["d"])["layer"]
+    assert spec["kind"] == "choice" and spec["choices"] == ["meta", "pts", "one"] and spec["default"] == "pts"
+
+
+def test_csv(tmp_path):
+    gpd = pytest.importorskip("geopandas")
+    for n in range(2):
+        pd.DataFrame({"Lon": [n, n + 0.5], "Lat": [n, n], "v": [n, n]}).to_csv(tmp_path / f"c{n}.csv", index=False)
+    pd.DataFrame({"a": [1], "b": [2]}).to_csv(tmp_path / "t.tsv.gz", sep="\t", index=False)
+    it = lambda i, p, t=None: item_with(f"c{i}", D(2020), d=(str(tmp_path / p), t))
+    items = [it(0, "c0.csv", "text/csv"), it(1, "c1.csv")]
+    df = Items(items).open()
+    assert isinstance(df, gpd.GeoDataFrame) and len(df) == 4 and df.crs == "EPSG:4326" and df.geometry.x[1] == 0.5
+    spec = openers.opener_params("csv", items, ["d"])
+    assert spec["x"]["choices"] == ["Lon", "Lat", "v"] and (spec["x"]["default"], spec["y"]["default"]) == ("Lon", "Lat")
+    assert type(Items(items).open(x=None)) is pd.DataFrame
+    tsv = Items([it(2, "t.tsv.gz")])
+    assert list(tsv.open().columns) == ["a", "b"] and openers.opener_params("csv", list(tsv), ["d"])["x"]["default"] is None
+
+
+def test_csv_station_items_keep_location(tmp_path):
+    gpd = pytest.importorskip("geopandas")
+    items = []
+    for n, (lon, lat) in enumerate([(7.4, 46.9), (8.5, 47.4)]):
+        pd.DataFrame({"time": [1, 2], "t": [n, n]}).to_csv(tmp_path / f"s{n}.csv", sep=";", index=False)
+        it = item_with(f"st{n}", D(2020), d=(str(tmp_path / f"s{n}.csv"), "text/csv"))
+        it.geometry, it.bbox = {"type": "Point", "coordinates": [lon, lat]}, [lon, lat, lon, lat]
+        items.append(it)
+    df = Items(items).open()
+    assert isinstance(df, gpd.GeoDataFrame) and df.crs == "EPSG:4326" and len(df) == 4
+    assert list(df.item_id) == ["st0", "st0", "st1", "st1"] and list(df.geometry.x) == [7.4, 7.4, 8.5, 8.5]
+
+
+def test_csv_separators(tmp_path):
+    for sep, name in [(";", "semi.csv"), (",", "comma.csv"), ("|", "pipe.csv")]:
+        pd.DataFrame({"a": ["x,y", "z"], "b": [1, 2]}).to_csv(tmp_path / name, sep=sep, index=False)
+        it = Items([item_with("s", D(2020), d=(str(tmp_path / name), "text/csv"))])
+        assert openers.opener_params("csv", list(it), ["d"])["sep"]["default"] == sep
+        df = it.open()
+        assert list(df.columns) == ["a", "b"] and list(df.a) == ["x,y", "z"]
+    assert list(it.open(sep=",").columns) == ["a|b"]  # explicit sep wins
+
+
 def test_opener_override_and_user_registration():
     it = item_with("a", D(2020), d=("x.nc", "application/x-netcdf"))
     calls = []
@@ -125,6 +183,8 @@ def test_errors():
     assert "nc (nc)" not in str(e.value) and "netcdf" in str(e.value) and "geoparquet" in str(e.value)
     with pytest.raises(KeyError, match="missing"):
         Items([it]).open("missing")
+    with pytest.raises(ValueError, match="no assets selected"):
+        Items([it]).open([])
     with pytest.raises(ValueError, match="no opener"):
         Items([it]).open("odd")
     bare = make_item("b", (0, 0, 1, 1), D(2020))
@@ -136,6 +196,7 @@ def test_errors():
 @pytest.mark.parametrize("href", ["s3://b/a.zarr/", "https://h/a.zarr?sig=1"])
 def test_extension_match(href):
     assert openers._match(pystac.Asset(href)) == "zarr"
+    assert openers._match(pystac.Asset(href.replace(".zarr", ".gdb.zip").replace("zip/", "zip"))) == "filegdb"
 
 
 def test_collection_open_zarr(tmp_path):

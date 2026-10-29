@@ -444,6 +444,22 @@ def test_items_card_is_item_browser():
     assert feats[0]["properties"]["props"]["cloud cover"] == "5%" and "<details" not in h
 
 
+def test_items_card_popup_shows_title_and_any_properties():
+    it = pystac.Item("alt", {"type": "Point", "coordinates": [8.6, 46.9]}, [8.6, 46.9, 8.6, 46.9], D(2020),
+                     {"title": "Altdorf (ALT)", "station:height": 438, "nested": {"a": 1}, "created": "2020-01-01"})
+    h = Items([it])._repr_html_()
+    p = json.loads(_script(h).split("data=", 1)[1].split(";", 1)[0])["features"][0]["properties"]
+    assert p["title"] == "Altdorf (ALT)" and p["props"] == {"station:height": 438}
+    assert "Altdorf (ALT)</span>" in h  # shown in the list too
+
+
+def test_items_list_shows_time_unless_midnight():
+    a = make_item("a", (0, 0, 1, 1), dt.datetime(2020, 5, 1, 4, 30, 18, tzinfo=dt.timezone.utc))
+    b = make_item("b", (0, 0, 1, 1), dt.datetime(2020, 5, 2, tzinfo=dt.timezone.utc))
+    h = Items([a, b])._repr_html_()
+    assert "<td class='m nw'>2020-05-01 04:30</td>" in h and "<td class='m nw'>2020-05-02</td>" in h
+
+
 def test_items_card_item_data_cannot_break_out():
     it = make_item("<img src=x onerror=alert(1)></script>", (0, 0, 1, 1), D(2020), platform="</script><script>x")
     it.add_asset("thumbnail", pystac.Asset("javascript:alert(1)", media_type="image/png"))

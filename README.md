@@ -7,7 +7,7 @@ Browse STAC catalogs in Jupyter with dot notation, HTML viewers, an interactive 
 ```bash
 pip install stac-viewer             # core
 pip install "stac-viewer[widget]"   # + interactive selector() (anywidget)
-pip install "stac-viewer[open]"     # + open() for all formats (or [cog], [zarr], [netcdf], [parquet])
+pip install "stac-viewer[open]"     # + open() for all formats (or [cog], [zarr], [netcdf], [parquet], [gdb], [csv])
 ```
 
 ## Usage
@@ -26,7 +26,7 @@ items = col.search(bbox=[8.4, 47.3, 8.7, 47.5], datetime="2026-06-01/2026-06-30"
 ## Opening data
 
 `items.open(assets)` and `col.open(assets)` (collection-level assets) return an `xarray.Dataset`, or a
-`pandas`/`geopandas` DataFrame for parquet. `assets` is a key or list of keys; by default all `data`-role assets
+`pandas`/`geopandas` DataFrame for parquet, File Geodatabases and CSV. `assets` is a key or list of keys; by default all `data`-role assets
 that an opener can handle. Extra kwargs go to the backend.
 
 ```python
@@ -46,6 +46,8 @@ Explicit kwargs win, as with `col.search(sel)`. Set them from code with
 | `zarr` | `application/vnd+zarr`, `.zarr` | xpystac (`engine="stac"`) | `xr.combine_by_coords` |
 | `netcdf` | `application/x-netcdf`, `x-hdf5`, `.nc`, `.h5` | `xr.open_dataset(engine="h5netcdf")` (+ fsspec) | `xr.combine_by_coords` |
 | `geoparquet` | `application/vnd.apache.parquet`, `.parquet` | `geopandas.read_parquet` | `pd.concat` |
+| `filegdb` | `.gdb.zip` (zipped Esri File Geodatabase) | `geopandas.read_file` (pyogrio; `layer=...`) | `pd.concat` |
+| `csv` | `text/csv`, `text/tab-separated-values`, `.csv`, `.tsv` (+`.gz`) | `pd.read_csv` (`sep=` `,` `;` tab `|`, sniffed from the header); points from `x=`/`y=` columns (lon/lat auto-detected), else from the item's Point geometry (+ `item_id`) | `pd.concat` |
 
 Assets are matched by exact media type, then base type, then file extension. Add your own (later registrations
 win, so this can override a built-in):

@@ -32,8 +32,8 @@ def _norm(t: str) -> str:
 
 
 class Param(NamedTuple):
-    """Opener setting: ``kind`` is ``str``/``float``/``int`` or a list of choices; ``default`` is a
-    value, None, or ``f(items, assets) -> value`` inferred from the selection."""
+    """Opener setting: ``kind`` is ``str``/``float``/``int``, a list of choices, or ``f(items, assets) -> choices``
+    (e.g. read from the file); ``default`` is a value, None, or ``f(items, assets) -> value`` inferred from the selection."""
 
     kind: object
     default: object = None
@@ -68,12 +68,15 @@ def _ext(href: str) -> str:
 def _match(asset: pystac.Asset) -> str | None:
     """Opener name for an asset: exact media type, then base type, then extension."""
     t = _norm(asset.media_type or "")
-    steps = [("exact", t), ("base", t.split(";")[0]), ("ext", _ext(asset.href))]
-    for field, val in steps:
+    for field, val in [("exact", t), ("base", t.split(";")[0])]:
         if val:
             for name, o in reversed(_REGISTRY.items()):
                 if val in o[field]:
                     return name
+    path = urlparse(asset.href).path.rstrip("/").lower()
+    for name, o in reversed(_REGISTRY.items()):  # suffix match, so compound extensions like .gdb.zip work
+        if any(path.endswith(e) for e in o["ext"]):
+            return name
     return None
 
 
@@ -105,6 +108,8 @@ def resolve(owners: list, assets=None, opener: str | None = None) -> tuple[str, 
         keys = [assets] if isinstance(assets, str) else list(assets)
         if missing := [k for k in keys if k not in avail]:
             raise KeyError(f"assets {missing} not found. Available: {listing}")
+        if not keys:  # e.g. an open_settings() widget with nothing ticked
+            raise ValueError(f"no assets selected. Available: {listing}")
     if opener is None:
         names = {k: _match(avail[k]) for k in keys}
         if None in names.values():
@@ -158,7 +163,13 @@ def opener_params(name: str, owners: list, assets: list[str]) -> dict[str, dict]
                 d = d(owners, assets)
             except Exception:
                 d = None
-        spec = {"kind": "choice", "choices": list(p.kind)} if isinstance(p.kind, (list, tuple)) else {"kind": p.kind.__name__}
+        kind = p.kind
+        if callable(kind) and not isinstance(kind, type):
+            try:
+                kind = list(kind(owners, assets)) or str
+            except Exception:
+                kind = str  # choices unavailable: fall back to free text
+        spec = {"kind": "choice", "choices": list(kind)} if isinstance(kind, (list, tuple)) else {"kind": kind.__name__}
         out[pname] = {**spec, "default": d, "inferred": inferred}
     return out
 
@@ -292,3 +303,98 @@ def _open_geoparquet(items, assets, **kwargs):
         except ValueError:  # no geo metadata
             out.append(pd.read_parquet(a.href, **kwargs))
     return out[0] if len(out) == 1 else pd.concat(out, ignore_index=True)
+
+
+def _gdb_layers(items, assets):
+    """``[(name, geometry type or None)]`` of the first selected geodatabase."""
+    pyogrio = _need("pyogrio", "gdb")
+    return [tuple(r) for r in pyogrio.list_layers(_pairs(items, assets)[0][1].href)]
+
+
+def _gdb_default_layer(items, assets):
+    """First layer with geometry; GDAL's default is the first layer, often a metadata table."""
+    layers = _gdb_layers(items, assets)
+    return next((n for n, g in layers if g), layers[0][0] if layers else None)
+
+
+@register_opener(
+    "filegdb",
+    media_types=["application/x.filegdb+zip"],  # used by data.geo.admin.ch
+    extensions=[".gdb.zip"],
+    params={"layer": Param(lambda i, a: [n for n, _ in _gdb_layers(i, a)], _gdb_default_layer)},
+)
+def _open_filegdb(items, assets, **kwargs):
+    gpd = _need("geopandas", "gdb")
+    pd = _need("pandas", "gdb")
+    _need("pyogrio", "gdb")  # GDAL's OpenFileGDB driver reads zipped geodatabases directly
+    pairs = _pairs(items, assets)
+    if kwargs.get("layer") is None:
+        kwargs["layer"] = _gdb_default_layer(items, assets)
+    out = [gpd.read_file(a.href, **kwargs) for _, a in pairs]
+    return out[0] if len(out) == 1 else pd.concat(out, ignore_index=True)
+
+
+_CSV_X, _CSV_Y = ("lon", "longitude", "lng", "long", "x", "easting"), ("lat", "latitude", "y", "northing")
+
+
+_CSV_SEPS = (",", ";", "\t", "|")
+
+
+def _csv_sniff(href: str) -> str:
+    """Separator occurring most often in the header line (``,`` if none does)."""
+    pd = _need("pandas", "csv")
+    head = pd.read_csv(href, sep="\x01", header=None, nrows=1, quoting=3, dtype=str).iat[0, 0]  # whole first line
+    n = {s: str(head).count(s) for s in _CSV_SEPS}
+    return max(n, key=n.get) if any(n.values()) else ","
+
+
+def _csv_read(href: str, **kwargs):
+    pd = _need("pandas", "csv")
+    if kwargs.get("sep") is None:
+        kwargs["sep"] = _csv_sniff(href)
+    return pd.read_csv(href, **kwargs)
+
+
+def _csv_columns(items, assets):
+    """Header of the first selected CSV."""
+    return list(_csv_read(_pairs(items, assets)[0][1].href, nrows=0).columns)
+
+
+def _csv_coord(names):
+    def default(items, assets):
+        cols = {c.lower(): c for c in _csv_columns(items, assets)}
+        return next((cols[n] for n in names if n in cols), None)
+
+    return default
+
+
+@register_opener(
+    "csv",
+    media_types=["text/csv", "application/csv", "text/tab-separated-values"],
+    extensions=[".csv", ".csv.gz", ".tsv", ".tsv.gz"],
+    params={
+        "sep": Param(list(_CSV_SEPS), lambda i, a: _csv_sniff(_pairs(i, a)[0][1].href)),  # not passed: sniffed per file
+        "x": Param(_csv_columns, _csv_coord(_CSV_X)),  # x and y set: GeoDataFrame of points
+        "y": Param(_csv_columns, _csv_coord(_CSV_Y)),
+        "crs": Param(str, lambda i, a: _infer_crs(i, a) or "EPSG:4326"),
+    },
+)
+def _open_csv(items, assets, x=..., y=..., crs=None, **kwargs):
+    pd = _need("pandas", "csv")
+    x = _csv_coord(_CSV_X)(items, assets) if x is ... else x  # not passed: infer; None: plain DataFrame
+    y = _csv_coord(_CSV_Y)(items, assets) if y is ... else y
+    out = []
+    for i, a in _pairs(items, assets):
+        df = _csv_read(a.href, **kwargs)
+        g = getattr(i, "geometry", None) or {}
+        if not (x and y) and g.get("type") == "Point":  # e.g. one station per item: keep its location
+            gpd = _need("geopandas", "csv")
+            lon, lat = g["coordinates"][:2]
+            df = gpd.GeoDataFrame(df.assign(item_id=i.id), geometry=gpd.points_from_xy([lon] * len(df), [lat] * len(df)),
+                                  crs="EPSG:4326")
+        out.append(df)
+    df = out[0] if len(out) == 1 else pd.concat(out, ignore_index=True)
+    if x and y:
+        gpd = _need("geopandas", "csv")
+        df = gpd.GeoDataFrame(df, geometry=gpd.points_from_xy(df[x], df[y]), crs=crs or "EPSG:4326")
+    return df
