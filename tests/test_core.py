@@ -276,6 +276,23 @@ def test_long_description_expandable():
     assert len(head) <= 300 and head.endswith("word")  # cut at a word boundary
 
 
+def test_asset_media_types():
+    col = make_collection("assets")
+    cog = "image/tiff; application=geotiff; profile=cloud-optimized"
+    col.extra_fields["item_assets"] = {
+        "B04": {"type": cog, "title": "Red"},
+        "meta": {"type": "application/xml"},
+        "odd": {"type": "application/x-custom"},
+    }
+    col.add_asset("geoparquet", pystac.Asset("https://x/y.parquet", media_type="application/x-parquet"))
+    h = core.CollectionView(col, None)._repr_html_()
+    assert "Item assets (3) <span class='m' style='font-weight:400'>· COG, XML, application/x-custom</span>" in h
+    assert f"title='{cog}'>COG</td><td>Red</td>" in h  # full media type on hover
+    assert "Collection assets (1)" in h and ">Parquet</td><td>https://x/y.parquet</td>" in h
+    assert core._media("image/tiff;application=geotiff;profile=cloud-optimized") == "COG"
+    assert core._media("application/wmo-GRIB2") == "GRIB2" and core._media(None) == ""
+
+
 def test_collection_card_map(cols):
     h = cols.alpha._repr_html_()
     assert 'id="stacmap-' in h and "<svg" in h  # fallback inside the container

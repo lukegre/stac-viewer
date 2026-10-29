@@ -287,6 +287,60 @@ def _table(d: dict) -> str:
     return f"<table>{rows}</table>"
 
 
+_MEDIA = {
+    "image/tiff; application=geotiff; profile=cloud-optimized": "COG",
+    "image/tiff; application=geotiff": "GeoTIFF",
+    "image/tiff": "TIFF",
+    "image/png": "PNG",
+    "image/jpeg": "JPEG",
+    "image/jpg": "JPEG",
+    "image/webp": "WebP",
+    "image/gif": "GIF",
+    "application/x-netcdf": "NetCDF",
+    "application/netcdf": "NetCDF",
+    "application/x-hdf": "HDF",
+    "application/x-hdf5": "HDF5",
+    "application/vnd+zarr": "Zarr",
+    "application/x-parquet": "Parquet",
+    "application/vnd.apache.parquet": "Parquet",
+    "application/wmo-grib2": "GRIB2",
+    "application/vnd.laszip+copc": "COPC",
+    "application/geopackage+sqlite3": "GeoPackage",
+    "application/geo+json": "GeoJSON",
+    "application/json": "JSON",
+    "application/x-ndjson": "NDJSON",
+    "application/xml": "XML",
+    "text/xml": "XML",
+    "application/zip": "ZIP",
+    "application/pdf": "PDF",
+    "text/plain": "text",
+    "text/html": "HTML",
+}
+
+
+def _media(t: str | None) -> str:
+    """Short label for a media type ('COG', 'NetCDF', ...), else the media type itself."""
+    if not t:
+        return ""
+    return _MEDIA.get(t.lower().replace(" ", "").replace(";", "; "), t)
+
+
+def _assets_html(label: str, assets: dict[str, dict], href: bool = False) -> str:
+    """<details> table of asset key, title (or href) and short media type; the summary lists the formats."""
+    rows, kinds = [], []
+    for k, a in assets.items():
+        t = a.get("type") or ""
+        kinds.append(_media(t))
+        rows.append(
+            f"<tr><td class='m'>{html.escape(str(k))}</td>"
+            f"<td class='nw' title='{html.escape(t, quote=True)}'>{html.escape(_media(t))}</td>"
+            f"<td>{html.escape(str(a.get('href' if href else 'title') or ''))}</td></tr>"
+        )
+    kinds = ", ".join(dict.fromkeys(k for k in kinds if k))
+    kinds = f" <span class='m' style='font-weight:400'>· {html.escape(kinds)}</span>" if kinds else ""
+    return f"<details><summary>{label} ({len(rows)}){kinds}</summary><table>{''.join(rows)}</table></details>"
+
+
 def _desc_html(text: str | None, n: int = 300) -> str:
     """Description in full if short, else a <details> whose summary is the first ~n chars (word boundary)."""
     text = (text or "").strip()
@@ -788,11 +842,11 @@ class CollectionView:
             parts.append(f"<details><summary>Summaries ({len(summaries)})</summary>{_table(summaries)}</details>")
         ia = c.extra_fields.get("item_assets") or {}
         if ia:
-            rows = {k: (v.get("title") or v.get("type") or "") if isinstance(v, dict) else str(v) for k, v in ia.items()}
-            parts.append(f"<details><summary>Item assets ({len(ia)})</summary>{_table(rows)}</details>")
+            ia = {k: v if isinstance(v, dict) else {"title": str(v)} for k, v in ia.items()}
+            parts.append(_assets_html("Item assets", ia))
         if c.assets:
-            rows = {k: a.href for k, a in c.assets.items()}
-            parts.append(f"<details><summary>Collection assets ({len(rows)})</summary>{_table(rows)}</details>")
+            ca = {k: {"href": a.href, "type": a.media_type} for k, a in c.assets.items()}
+            parts.append(_assets_html("Collection assets", ca, href=True))
         return f"{_CSS}<div class='sc'>{''.join(parts)}</div>"
 
     # ---- selector + search
