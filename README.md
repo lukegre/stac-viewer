@@ -7,7 +7,7 @@ Browse STAC catalogs in Jupyter with dot notation, HTML viewers, an interactive 
 ```bash
 pip install stac-viewer             # core
 pip install "stac-viewer[widget]"   # + interactive selector() (anywidget)
-pip install "stac-viewer[open]"     # + open() for all formats (or [cog], [zarr], [netcdf], [parquet], [gdb], [csv])
+pip install "stac-viewer[open]"     # + open() for all formats (or [cog], [zarr], [netcdf], [parquet], [gdb] (also GeoPackage, GeoJSON), [csv])
 ```
 
 ## Usage
@@ -47,6 +47,8 @@ Explicit kwargs win, as with `col.search(sel)`. Set them from code with
 | `netcdf` | `application/x-netcdf`, `x-hdf5`, `.nc`, `.h5` | `xr.open_dataset(engine="h5netcdf")` (+ fsspec) | `xr.combine_by_coords` |
 | `geoparquet` | `application/vnd.apache.parquet`, `.parquet` | `geopandas.read_parquet` | `pd.concat` |
 | `filegdb` | `.gdb.zip` (zipped Esri File Geodatabase) | `geopandas.read_file` (pyogrio; `layer=...`) | `pd.concat` |
+| `gpkg` | `application/geopackage+sqlite3`, `.gpkg` | same as `filegdb` | `pd.concat` |
+| `geojson` | `application/geo+json`, `.geojson` | `geopandas.read_file` (pyogrio) | `pd.concat` |
 | `csv` | `text/csv`, `text/tab-separated-values`, `.csv`, `.tsv` (+`.gz`) | `pd.read_csv` (`sep=` `,` `;` tab `|`, sniffed from the header); points from `x=`/`y=` columns (lon/lat auto-detected), else from the item's Point geometry (+ `item_id`) | `pd.concat` |
 
 Assets are matched by exact media type, then base type, then file extension. Add your own (later registrations
