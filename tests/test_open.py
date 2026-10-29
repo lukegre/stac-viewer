@@ -278,6 +278,22 @@ def test_open_settings_switch_opener_and_keep_edits():
     assert w.opener == "" and w.code == "" and w.error == ""
 
 
+def test_open_settings_set():
+    w = cog_items().open_settings()
+    assert w.set(resampling="cubic") is w and w.values["resampling"] == "cubic"
+    w.set(assets="red", crs="EPSG:4326", resolution=0.001)
+    assert w.assets == ["red"] and w.kwargs() == {"crs": "EPSG:4326", "resolution": 0.001, "resampling": "cubic"}
+    assert "crs='EPSG:4326'" in w.code
+    with pytest.raises(KeyError, match="resolutoin.*Available: crs"):
+        w.set(resolutoin=20)
+    with pytest.raises(ValueError, match="resolution"):
+        w.set(resolution="abc")
+    with pytest.raises(ValueError, match="different openers"):
+        w.set(assets=["red", "nc"])
+    with pytest.raises(KeyError, match="none"):
+        w.set(assets=["nc"], crs="EPSG:4326")  # netcdf has no settings
+
+
 def test_open_with_settings_widget():
     seen = {}
 

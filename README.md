@@ -37,7 +37,8 @@ ds = items.open("data", opener="netcdf")                          # force an ope
 
 In a notebook, `w = items.open_settings(); w` shows the assets grouped by opener and the opener's settings (e.g.
 `crs`, `resolution` for COGs, pre-filled from the items) with the equivalent call to copy; `items.open(w)` uses them.
-Explicit kwargs win, as with `col.search(sel)`.
+Explicit kwargs win, as with `col.search(sel)`. Set them from code with
+`w.set(assets=["B04", "B08"], crs="EPSG:4326", resolution=0.0001)`.
 
 | opener | media types / extensions | backend | several items |
 |---|---|---|---|

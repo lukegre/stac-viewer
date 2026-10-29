@@ -1030,6 +1030,22 @@ if anywidget is not None:
             call = "".join(f"  {k}={v!r},\n" for k, v in {"assets": list(self.assets), **kw}.items())
             self.code = f"open(\n{call})" if self.assets else ""
 
+        def set(self, assets=None, **values) -> "OpenSettings":
+            """Set the selection and settings from code, e.g. ``w.set(assets=["B04"], crs="EPSG:4326")``.
+
+            ``assets`` is applied first (switching opener resets the settings to its defaults); returns ``self``.
+            """
+            if assets is not None:
+                self.assets = [assets] if isinstance(assets, str) else list(assets)
+                if self.error:
+                    raise ValueError(self.error)
+            if bad := [k for k in values if k not in self.params]:
+                raise KeyError(f"unknown settings {bad} for opener {self.opener!r}. Available: {', '.join(self.params) or 'none'}")
+            self.values = {**self.values, **values}
+            if self.error:
+                raise ValueError(self.error)
+            return self
+
         def kwargs(self) -> dict:
             """Opener settings to pass to ``open``: set, and either inferred or changed from the default."""
             out = {}
