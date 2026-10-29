@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "marimo-bafu",
+      "runtimeExecutable": ".venv/bin/marimo",
+      "runtimeArgs": ["run", "examples/bafu_catalog_marimo.py", "--headless", "--port", "2718", "--no-token"],
+      "port": 2718
+    }
+  ]
+}

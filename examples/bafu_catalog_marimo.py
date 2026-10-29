@@ -35,9 +35,9 @@ def _(mo):
     return
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(browse):
-    bafu = browse("https://data.geo.admin.ch/api/stac/v1/collections")
+    bafu = browse("https://data.geo.admin.ch/api/stac/v1/")
     bafu
     return (bafu,)
 
@@ -120,6 +120,11 @@ def _(out):
         .plot.imshow(aspect=2, size=6, cmap="Spectral_r", vmin=0, vmax=25)
     )
     _img.axes
+    return
+
+
+@app.cell
+def _():
     return
 
 

@@ -113,6 +113,15 @@ def _(items, mo):
     return (settings,)
 
 
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ## Open as `xarray.Dataset`
+    Open the STAC items as an `xarray.Dataset`. Settings to open the data are taken from the settings widget defined above
+    """)
+    return
+
+
 @app.cell
 def _(items, settings):
     out = items.open(settings.widget)
@@ -134,6 +143,7 @@ def _(mo):
 def _(mo):
     run =mo.ui.run_button(label="Compute median mosaic")
     run
+
     return (run,)
 
 
