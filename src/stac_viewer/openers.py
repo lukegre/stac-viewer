@@ -59,12 +59,15 @@ def _ext(href: str) -> str:
 def _match(asset: pystac.Asset) -> str | None:
     """Opener name for an asset: exact media type, then base type, then extension."""
     t = _norm(asset.media_type or "")
-    steps = [("exact", t), ("base", t.split(";")[0]), ("ext", _ext(asset.href))]
-    for field, val in steps:
+    for field, val in [("exact", t), ("base", t.split(";")[0])]:
         if val:
             for name, o in reversed(_REGISTRY.items()):
                 if val in o[field]:
                     return name
+    path = urlparse(asset.href).path.rstrip("/").lower()
+    for name, o in reversed(_REGISTRY.items()):  # suffix match, so compound extensions like .gdb.zip work
+        if any(path.endswith(e) for e in o["ext"]):
+            return name
     return None
 
 
@@ -195,4 +198,13 @@ def _open_geoparquet(items, assets, **kwargs):
             out.append(gpd.read_parquet(a.href, **kwargs))
         except ValueError:  # no geo metadata
             out.append(pd.read_parquet(a.href, **kwargs))
+    return out[0] if len(out) == 1 else pd.concat(out, ignore_index=True)
+
+
+@register_opener("filegdb", extensions=[".gdb.zip"])
+def _open_filegdb(items, assets, **kwargs):
+    gpd = _need("geopandas", "gdb")
+    pd = _need("pandas", "gdb")
+    _need("pyogrio", "gdb")  # GDAL's OpenFileGDB driver reads zipped geodatabases directly
+    out = [gpd.read_file(a.href, **kwargs) for _, a in _pairs(items, assets)]  # pick a layer with layer=...
     return out[0] if len(out) == 1 else pd.concat(out, ignore_index=True)

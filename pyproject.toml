@@ -34,7 +34,11 @@ parquet = [
     "geopandas>=0.14",
     "pyarrow>=14",
 ]
-open = ["stac-viewer[cog,zarr,netcdf,parquet]"]
+gdb = [
+    "geopandas>=0.14",
+    "pyogrio>=0.7",
+]
+open = ["stac-viewer[cog,zarr,netcdf,parquet,gdb]"]
 
 [dependency-groups]
 dev = [
