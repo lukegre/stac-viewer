@@ -8,13 +8,14 @@ authors = [
 ]
 requires-python = ">=3.10"
 dependencies = [
+    "anywidget>=0.9",
     "odc-stac>=0.5.3",
+    "openpyxl>=3.1.5",
     "pystac>=1.10",
     "pystac-client>=0.8",
 ]
 
 [project.optional-dependencies]
-widget = ["anywidget>=0.9"]
 cog = [
     "odc-stac>=0.3.10",
     "xarray>=2024.1",
@@ -43,11 +44,16 @@ csv = [
     "geopandas>=0.14",
 ]
 open = ["stac-viewer[cog,zarr,netcdf,parquet,gdb,csv]"]
+vis = [
+    "matplotlib>=3.10.9",
+    "folium>=0.20.0",
+    "mapclassify>=2.8.1",
+    "xyzservices>=2026.9.1",
+]
 
 [dependency-groups]
 dev = [
     "pytest",
-    "anywidget",
     "ipykernel",
     "nbclient",
     "nbformat",

@@ -3,7 +3,7 @@ import pystac
 import pytest
 
 import stac_viewer
-from stac_viewer import Items, openers
+from stac_viewer import Items, _frontend, openers
 from test_core import D, make_collection, make_item
 
 xr = pytest.importorskip("xarray")
@@ -220,9 +220,19 @@ def test_errors():
     with pytest.raises(ValueError, match="no opener"):
         Items([it]).open("odd")
     bare = make_item("b", (0, 0, 1, 1), D(2020))
-    bare.add_asset("x", pystac.Asset("x.nc"))
+    bare.add_asset("x", pystac.Asset("x.xyz"))
     with pytest.raises(ValueError, match="role 'data'"):
         Items([bare]).open()
+
+
+def test_sole_asset_selected_without_data_role():
+    it = make_item("a", (0, 0, 1, 1), D(2020))
+    it.add_asset("x", pystac.Asset("x.nc"))
+    assert openers.resolve([it]) == ("netcdf", ["x"])
+    assert stac_viewer.Items([it]).open_settings().assets == ["x"]
+    it.add_asset("y", pystac.Asset("y.nc"))  # two non-data assets: no default
+    with pytest.raises(ValueError, match="role 'data'"):
+        openers.resolve([it])
 
 
 @pytest.mark.parametrize("href", ["s3://b/a.zarr/", "https://h/a.zarr?sig=1"])
@@ -421,7 +431,7 @@ def test_open_esm_syntax(tmp_path):
         pytest.skip("node not installed")
     from stac_viewer import core
 
-    for n, src in {"open": core._OPEN_ESM, "sel": core._ESM}.items():
+    for n, src in {"open": _frontend._OPEN_ESM, "sel": _frontend._ESM}.items():
         f = tmp_path / f"{n}.mjs"
         f.write_text(src)
         subprocess.run(["node", "--check", str(f)], check=True)

@@ -6,7 +6,7 @@ import pystac_client
 import pytest
 
 from stac_viewer import Items, browse
-from stac_viewer import core
+from stac_viewer import _frontend, core
 from stac_viewer.core import _bar_span, _dt_range, _ident
 
 UTC = dt.timezone.utc
@@ -163,8 +163,8 @@ def test_selector_dates(cols):
 
 
 def test_attribution_reduced():
-    assert core._TILE_ATTR == "&copy; Esri, OSM"
-    assert "setPrefix(false)" in core._LEAFLET_JS and "stacmap-style" in core._LEAFLET_JS
+    assert _frontend._TILE_ATTR == "&copy; Esri, OSM"
+    assert "setPrefix(false)" in _frontend._LEAFLET_JS and "stacmap-style" in _frontend._LEAFLET_JS
 
 
 # ---------------------------------------------------------------- rendering

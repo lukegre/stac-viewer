@@ -6,7 +6,6 @@ Browse STAC catalogs in Jupyter with dot notation, HTML viewers, an interactive 
 
 ```bash
 pip install stac-viewer             # core
-pip install "stac-viewer[widget]"   # + interactive selector() (anywidget)
 pip install "stac-viewer[open]"     # + open() for all formats (or [cog], [zarr], [netcdf], [parquet], [gdb] (also GeoPackage, GeoJSON), [csv])
 ```
 

@@ -102,6 +102,8 @@ def resolve(owners: list, assets=None, opener: str | None = None) -> tuple[str, 
     listing = ", ".join(_fmt(k, a) for k, a in avail.items()) or "none"
     if assets is None:
         keys = [k for k, a in avail.items() if "data" in (a.roles or []) and (opener or _match(a))]
+        if not keys and len(avail) == 1 and (opener or _match(*avail.values())):  # sole asset, whatever its roles
+            keys = list(avail)
         if not keys:  # data assets without an opener (e.g. JPEG2000 duplicates) are skipped
             raise ValueError(f"no openable assets with role 'data'; pass assets=... Available: {listing}")
     else:
