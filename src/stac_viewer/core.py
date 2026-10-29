@@ -191,32 +191,95 @@ def _local_search(col: pystac.Collection, bbox=None, datetime=None, ids=None, ma
 
 
 # ------------------------------------------------------------------ HTML rendering
-_CSS = """<style>
-.sc{font:13px/1.4 var(--jp-ui-font-family,system-ui,sans-serif);border:1px solid rgba(128,128,128,.4);
- border-radius:8px;padding:10px;max-width:900px;color:var(--vscode-editor-foreground,inherit)}
-.vscode-dark .sc,[data-vscode-theme-kind*=dark] .sc{color-scheme:dark}
-.sc h4{margin:0 0 2px;font-size:15px}.sc .m{opacity:.65}
-.sc details{overflow-x:auto;margin-top:6px;border-top:1px solid rgba(128,128,128,.25);padding-top:6px}
-.sc summary{cursor:pointer;font-weight:600}
-.sc table{border-collapse:collapse}.sc td{padding:1px 10px 1px 0;vertical-align:top}
-.sc .row{display:flex;gap:16px;flex-wrap:wrap;align-items:flex-start;margin-top:8px}
-.sc .mp{flex:1 1 50%;min-width:50%}.sc .info{flex:1 1 40%;min-width:220px}
-.sc .ds{white-space:pre-line}.sc details.dsc{border:0;padding:0;margin:0}
-.sc .dsc>summary{font-weight:400}.sc .dsc[open]>summary .dmore{display:none}
-.sc .dsc>summary .dless{display:none;font-size:11px;opacity:.6}.sc .dsc[open]>summary .dless{display:inline}
-.sc .bar{position:relative;height:8px;background:rgba(128,128,128,.25);border-radius:4px;margin:6px 0 2px}
-.sc .bar>div{position:absolute;top:0;bottom:0;background:#3b82f6;border-radius:4px}
-.sc .nw{white-space:nowrap}
-.sc .row2{margin-top:8px}.sc .row2 .il{margin-top:8px}.sc .il table{width:100%}
-.sc .il{max-height:calc(16 * (1.4em + 2px));overflow:auto}.sc .il th{position:sticky;top:0;z-index:1;background:var(--vscode-editor-background,var(--jp-layout-color0,Canvas));text-align:left;font-weight:600}
-.sc .il td{text-align:left}
-.sc .il tr[data-i]{cursor:pointer}.sc .il tr.hov{background:rgba(59,130,246,.15)}
-.sc .il tr.selected{background:rgba(59,130,246,.3);box-shadow:inset 3px 0 #f97316;font-weight:600}
-.sc .pop{display:flex;gap:8px;align-items:flex-start}
+# theme tokens (JupyterLab variable, VS Code variable, plain fallback), shared by the static cards and the widget
+_TOKENS = [
+    ("fg", "--jp-content-font-color1", "--vscode-foreground", "inherit"),
+    ("muted", "--jp-content-font-color2", "--vscode-descriptionForeground", "rgba(128,128,128,.85)"),
+    ("faint", "--jp-content-font-color3", "--vscode-disabledForeground", "rgba(128,128,128,.6)"),
+    ("border", "--jp-border-color2", "--vscode-widget-border", "rgba(128,128,128,.25)"),
+    ("border-strong", "--jp-border-color1", "--vscode-input-border", "rgba(128,128,128,.5)"),
+    ("alt", "--jp-layout-color2", "--vscode-editorWidget-background", "rgba(128,128,128,.12)"),
+    ("bg", "--jp-layout-color0", "--vscode-editor-background", "Canvas"),
+    ("accent", "--jp-brand-color1", "--vscode-textLink-foreground", "#1976d2"),
+    ("hl", "--jp-warn-color1", "--vscode-editorWarning-foreground", "#f57c00"),
+    ("err", "--jp-error-color1", "--vscode-errorForeground", "#d32f2f"),
+    ("code-bg", "--jp-cell-editor-background", "--vscode-textCodeBlock-background", "rgba(128,128,128,.08)"),
+]
+# VS Code's widget host defines light --jp-* colours whatever the theme, so in VS Code its own variables come first
+_VSC = ":is(body[data-vscode-theme-kind],.vscode-light,.vscode-dark)"
+_ROOT = f"{_VSC} :is(.sc,.stacsel){{" + "".join(f"--sv-{n}:var({vs},var({jp},{p}));" for n, jp, vs, p in _TOKENS) + "}\n"
+_ROOT += ":is(.vscode-dark,[data-vscode-theme-kind*=dark]) :is(.sc,.stacsel){color-scheme:dark}\n"
+_ROOT += ".sc,.stacsel{" + "".join(f"--sv-{n}:var({jp},var({vs},{p}));" for n, jp, vs, p in _TOKENS) + (
+    "--sv-mono:var(--jp-code-font-family,var(--vscode-editor-font-family,ui-monospace,Menlo,Consolas,monospace));"
+    "container-type:inline-size;position:relative;color:var(--sv-fg);"
+    "font:var(--jp-ui-font-size1,13px)/1.45 var(--jp-ui-font-family,var(--vscode-font-family,system-ui,sans-serif))}\n"
+    ".sc .lbl,.stacsel .lbl,.sc .ty{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--sv-muted)}\n"
+    ".sc .lbl,.stacsel .lbl{margin:0 0 6px}\n"
+)
+_IN = ("font:inherit;color:var(--sv-fg);background:var(--sv-bg);border:1px solid var(--sv-border-strong);border-radius:3px;"
+       "height:28px;padding:0 8px;box-sizing:border-box;color-scheme:inherit")
+_IN_FOCUS = "outline:none;border-color:var(--sv-accent);box-shadow:0 0 0 1px var(--sv-accent)"
+
+_CSS = "<style>" + _ROOT + """
+.sc .hd{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;padding-bottom:6px;border-bottom:1px solid var(--sv-border)}
+.sc .tt{font-size:15px;font-weight:600}.sc .mt{margin-left:auto;font-size:12px;color:var(--sv-muted)}
+.sc .m{color:var(--sv-muted)}.sc .nw{white-space:nowrap}
+.sc .ds{white-space:pre-line;margin:8px 0 0;max-width:110ch;color:var(--sv-muted)}.sc .ds:empty{display:none}
+.sc details.dsc{border:0;margin:8px 0 0;overflow:visible}.sc .dsc>summary{font-weight:400;list-style:none}
+.sc .dsc>summary::-webkit-details-marker{display:none}.sc .dsc[open]>summary .dmore{display:none}
+.sc .dsc>summary .dless{display:none;font-size:11px;color:var(--sv-faint)}.sc .dsc[open]>summary .dless{display:inline}
+.sc .grid{display:grid;grid-template-columns:minmax(0,3fr) minmax(0,2fr);gap:20px;margin-top:12px}
+.sc .grid.one{grid-template-columns:minmax(0,1fr)}
+.sc .grid.eq{grid-template-columns:minmax(0,1fr) minmax(0,1fr);grid-auto-rows:420px}
+@container (max-width:720px){.sc .grid,.sc .grid.eq{grid-template-columns:minmax(0,1fr)}}
+.sc .mp,.sc .info{min-width:0}
+.sc .map{aspect-ratio:2/1;min-height:240px;max-height:440px;border:1px solid var(--sv-border);border-radius:3px;position:relative;overflow:hidden}
+.sc .grid.eq .map{aspect-ratio:auto;height:100%;max-height:none}.sc .map svg{display:block}
+.sc .kv{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:4px 16px;margin:0}
+.sc .kv dt{color:var(--sv-muted)}.sc .kv dd{margin:0;overflow-wrap:anywhere}
+.sc .bar{position:relative;height:6px;background:var(--sv-alt);border-radius:3px;margin:4px 0 3px}
+.sc .bar>div{position:absolute;top:0;bottom:0;background:var(--sv-accent);border-radius:3px}
+.sc .tk{display:flex;justify-content:space-between;font-size:11px;color:var(--sv-faint)}.sc .dt{margin:4px 0 16px}
+.sc details{border-top:1px solid var(--sv-border);margin-top:14px;overflow-x:auto}.sc details+details{margin-top:0}
+.sc details:not(.dsc)>summary{cursor:pointer;list-style:none;display:flex;gap:8px;align-items:center;padding:7px 0;font-weight:600}
+.sc details:not(.dsc)>summary::-webkit-details-marker{display:none}
+.sc details:not(.dsc)>summary::before{content:"\\25B8";color:var(--sv-muted);font-size:11px;transition:transform .15s}
+.sc details:not(.dsc)[open]>summary::before{transform:rotate(90deg)}
+.sc details:not(.dsc)>summary span{font-weight:400;color:var(--sv-muted)}.sc details>.kv{padding-bottom:10px}
+.sc .il{overflow:auto;border:1px solid var(--sv-border);border-radius:3px}
+.sc .tb{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}
+.sc .tb th{position:sticky;top:0;z-index:1;background:var(--sv-bg);text-align:left;font-weight:400;font-size:11px;letter-spacing:.06em;
+ text-transform:uppercase;color:var(--sv-muted);padding:5px 10px;border-bottom:1px solid var(--sv-border-strong)}
+.sc .tb td{padding:4px 10px;border-bottom:1px solid var(--sv-border);white-space:nowrap;text-align:left}
+.sc .tb td.id{max-width:0;width:100%;overflow:hidden;text-overflow:ellipsis;font-family:var(--sv-mono);font-size:12px}
+.sc .ovl{max-height:480px}
+.sc .at{margin-bottom:10px}.sc .at td.k{font-family:var(--sv-mono);font-size:12px}
+.sc .at td:last-child{white-space:normal;overflow-wrap:anywhere;width:100%}
+.sc .ov td.id{max-width:none;width:1%}.sc .ov td.m{white-space:normal}
+.sc .tb tbody tr:nth-child(even){background:color-mix(in srgb,var(--sv-alt) 45%,transparent)}
+.sc .tb tr[data-i]{cursor:pointer}
+.sc .tb tr.hov,.sc .tb tr[data-q]:hover{background:color-mix(in srgb,var(--sv-accent) 14%,transparent)}
+.sc .tb tr.sel{background:color-mix(in srgb,var(--sv-hl) 18%,transparent);box-shadow:inset 3px 0 var(--sv-hl)}
+.sc .cb{display:inline-block;width:38px;height:4px;border-radius:2px;background:var(--sv-alt);vertical-align:middle;margin-right:6px;position:relative;overflow:hidden}
+.sc .cb>i{position:absolute;inset:0 auto 0 0;background:var(--sv-muted)}
+.sc .pop{display:flex;gap:10px;align-items:flex-start;font-size:12px}
 .sc .pop img{display:block;flex:none;width:160px;max-height:160px;object-fit:contain}
-.sc .pop>div{min-width:0;max-width:220px}
-.sc .pop b{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.sc .tk{display:flex;justify-content:space-between;font-size:11px;opacity:.6}
+.sc .pop>div{min-width:0;max-width:220px}.sc .pop div div{color:var(--sv-muted)}
+.sc .pop b{display:block;margin-bottom:3px;font:11px var(--sv-mono);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sc .tip{position:absolute;z-index:1000;max-width:360px;padding:8px 10px;pointer-events:none;background:var(--sv-bg);color:var(--sv-fg);
+ border:1px solid var(--sv-border-strong);border-left:3px solid var(--sv-accent);border-radius:4px;box-shadow:0 4px 14px rgba(0,0,0,.18);font-size:12px;line-height:1.45}
+.sc .tip[hidden]{display:none}.sc .tip b{display:block;margin-bottom:3px;font-size:13px}.sc .tip div{color:var(--sv-muted)}
+.sc .tip img{display:block;width:100%;max-height:180px;object-fit:contain;margin-bottom:6px;border-radius:3px}
+.sc .tip img[hidden]{display:none}
+.sc .q{position:relative;display:flex;align-items:center;margin:12px 0 8px;color:var(--sv-muted)}.sc .q[hidden]{display:none}
+.sc .q svg{position:absolute;left:10px;width:14px;height:14px;pointer-events:none}
+.sc .q input{""" + _IN + """;width:100%;height:32px;padding:0 90px 0 32px;border-radius:4px}.sc .q input:focus{""" + _IN_FOCUS + """}
+.sc .q input::placeholder{color:var(--sv-faint)}.sc .q input:hover:not(:focus){border-color:var(--sv-muted)}
+.sc .q span{position:absolute;right:32px;font-size:11px;color:var(--sv-muted);pointer-events:none}
+.sc .ov td.ti{width:100%;white-space:normal}.sc .ov td.id{width:1%;color:var(--sv-muted)}
+.sc .cp{display:inline-flex;vertical-align:middle;margin-left:6px;padding:2px;border:0;border-radius:3px;background:none;color:var(--sv-muted);cursor:pointer;opacity:0}
+.sc .cp svg{width:13px;height:13px}.sc .cp[hidden]{display:none}.sc .cp:hover{color:var(--sv-accent);background:var(--sv-alt)}
+.sc tr:hover .cp,.sc .cp:focus-visible,.sc .cp.ok{opacity:1}.sc .cp.ok{color:var(--sv-accent)}
 </style>"""
 
 
@@ -241,16 +304,16 @@ def _svg_map(bboxes, w: int = 240, h: int = 120, view=None) -> str:
         for a, c in spans:
             rects += (
                 f'<rect x="{x(a):.1f}" y="{y(n):.1f}" width="{max(x(c) - x(a), 2):.1f}" '
-                f'height="{max(y(s) - y(n), 2):.1f}" fill="#3b82f6" fill-opacity="{.35 if i == 0 else .2}" '
-                f'stroke="#1d4ed8"><title>[{bw:.2f}, {s:.2f}, {be:.2f}, {n:.2f}]</title></rect>'
+                f'height="{max(y(s) - y(n), 2):.1f}" fill-opacity="{.35 if i == 0 else .2}" '
+                f'style="fill:var(--sv-accent);stroke:var(--sv-accent)"><title>[{bw:.2f}, {s:.2f}, {be:.2f}, {n:.2f}]</title></rect>'
             )
     sx, sy = w / (east - west), h / (north - south)
     move = "" if view is None else f"translate({-(west + 180) * sx:.4f}, {-(90 - north) * sy:.4f}) "
-    land = f'<path d="{_LAND}" transform="{move}scale({sx:.4f}, {sy:.4f})" fill="rgba(128,128,128,.28)"/>'
+    land = f'<path d="{_LAND}" transform="{move}scale({sx:.4f}, {sy:.4f})" fill="currentColor" fill-opacity=".25"/>'
     clip = "" if view is None else ";overflow:hidden"
     return (
-        f'<svg viewBox="0 0 {w} {h}" width="100%" style="border:1px solid rgba(128,128,128,.4){clip}">{land}'
-        f'<g stroke="rgba(128,128,128,.35)" stroke-width="1">{grid}</g>{rects}</svg>'
+        f'<svg viewBox="0 0 {w} {h}" width="100%" style="color:var(--sv-muted){clip}">{land}'
+        f'<g stroke="currentColor" stroke-opacity=".3" stroke-width="1">{grid}</g>{rects}</svg>'
     )
 
 
@@ -281,10 +344,8 @@ def _bar_span(t0, t1, now=None) -> tuple[int, float, float]:
 
 
 def _table(d: dict) -> str:
-    rows = "".join(
-        f"<tr><td class='m'>{html.escape(str(k))}</td><td>{html.escape(str(v))}</td></tr>" for k, v in d.items()
-    )
-    return f"<table>{rows}</table>"
+    rows = "".join(f"<dt>{html.escape(str(k))}</dt><dd>{html.escape(str(v))}</dd>" for k, v in d.items())
+    return f"<dl class='kv'>{rows}</dl>"
 
 
 _MEDIA = {
@@ -332,13 +393,16 @@ def _assets_html(label: str, assets: dict[str, dict], href: bool = False) -> str
         t = a.get("type") or ""
         kinds.append(_media(t))
         rows.append(
-            f"<tr><td class='m'>{html.escape(str(k))}</td>"
-            f"<td class='nw' title='{html.escape(t, quote=True)}'>{html.escape(_media(t))}</td>"
-            f"<td>{html.escape(str(a.get('href' if href else 'title') or ''))}</td></tr>"
+            f"<tr><td class='k'>{html.escape(str(k))}</td>"
+            f"<td title='{html.escape(t, quote=True)}'>{html.escape(_media(t))}</td>"
+            f"<td class='m'>{html.escape(str(a.get('href' if href else 'title') or ''))}</td></tr>"
         )
     kinds = ", ".join(dict.fromkeys(k for k in kinds if k))
-    kinds = f" <span class='m' style='font-weight:400'>· {html.escape(kinds)}</span>" if kinds else ""
-    return f"<details><summary>{label} ({len(rows)}){kinds}</summary><table>{''.join(rows)}</table></details>"
+    head = f"<tr><th>key</th><th>format</th><th>{'href' if href else 'title'}</th></tr>"
+    return (
+        f"<details><summary>{label} <span>{len(rows)}{' · ' + html.escape(kinds) if kinds else ''}</span></summary>"
+        f"<table class='tb at'><thead>{head}</thead><tbody>{''.join(rows)}</tbody></table></details>"
+    )
 
 
 def _desc_html(text: str | None, n: int = 300) -> str:
@@ -357,33 +421,55 @@ def _desc_html(text: str | None, n: int = 300) -> str:
 
 
 # ------------------------------------------------------------------ Leaflet maps
-_TILE_BASE = "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}"
-_TILE_LABELS = "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Reference/MapServer/tile/{z}/{y}/{x}"
+_TILE = "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/NAME/MapServer/tile/{z}/{y}/{x}"  # NAME: World_{Light,Dark}_Gray_{Base,Reference}
 _TILE_ATTR = "&copy; Esri, OSM"
-_LEAFLET_JS = f"const TILE_BASE = {json.dumps(_TILE_BASE)}, TILE_LABELS = {json.dumps(_TILE_LABELS)}, TILE_ATTR = {json.dumps(_TILE_ATTR)}, TILE_MAX = 16;\n" + """
+# Leaflet chrome in theme tokens; injected once per page (the tokens live on .sc / .stacsel)
+_LEAF_CSS = "".join(":is(.sc,.stacsel) " + r + "\n" for r in [
+    ".leaflet-container{background:var(--sv-alt);font:inherit}",
+    ".leaflet-container .leaflet-control-attribution{font-size:9px;line-height:1.2;padding:0 4px;color:var(--sv-muted);"
+    "background:color-mix(in srgb,var(--sv-bg) 70%,transparent)}",
+    ".leaflet-container .leaflet-control-attribution a{color:inherit}",
+    ".leaflet-bar a{background:var(--sv-bg);color:var(--sv-fg);border-color:var(--sv-border)}",
+    ".leaflet-bar a:hover{background:var(--sv-alt)}.leaflet-bar{border:1px solid var(--sv-border-strong);box-shadow:none}",
+    ".leaflet-popup-content-wrapper,.leaflet-popup-tip{background:var(--sv-bg);color:var(--sv-fg);box-shadow:0 3px 12px rgba(0,0,0,.25)}",
+    ".leaflet-popup-content-wrapper{border-radius:4px}.leaflet-popup-content{margin:10px 12px;font-size:12px;line-height:1.45}",
+    ".leaflet-container a.leaflet-popup-close-button{color:var(--sv-muted)}.leaflet-popup-content a{color:var(--sv-accent)}",
+    ".leaflet-tooltip{background:var(--sv-bg);color:var(--sv-fg);border-color:var(--sv-border-strong);box-shadow:none}",
+])
+_LEAFLET_JS = (f"const TILE = {json.dumps(_TILE)}, TILE_ATTR = {json.dumps(_TILE_ATTR)}, TILE_MAX = 16, LEAF_CSS = {json.dumps(_LEAF_CSS)};\n"
+               + """
 const LEAF = "https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/";
+const tok = (el, n, d) => getComputedStyle(el).getPropertyValue(n).trim() || d;  // theme token as a concrete colour
+const isDark = el => {  // light text => dark theme (JupyterLab, VS Code and Colab all set the text colour)
+  const [r, g, b] = (getComputedStyle(el).color.match(/[\\d.]+/g) || []).map(Number);
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b > 128;
+};
 async function leaflet() {  // CSS link once per page; dynamic import avoids RequireJS clashes
   if (!document.getElementById("stacmap-css")) {
     const l = document.createElement("link");
     l.id = "stacmap-css"; l.rel = "stylesheet"; l.href = LEAF + "leaflet.css";
     await new Promise(r => { l.onload = l.onerror = r; document.head.append(l); });
   }
-  if (!document.getElementById("stacmap-style")) {  // small attribution
+  if (!document.getElementById("stacmap-style")) {
     const st = document.createElement("style");
-    st.id = "stacmap-style";
-    st.textContent = ".leaflet-container .leaflet-control-attribution{font-size:9px;line-height:1.2;padding:0 4px;background:rgba(255,255,255,.6)}";
+    st.id = "stacmap-style"; st.textContent = LEAF_CSS;
     document.head.append(st);
   }
   return import(LEAF + "leaflet-src.esm.js");
 }
 function basemap(L, el) {
-  const map = L.map(el, { scrollWheelZoom: false, worldCopyJump: true, maxZoom: TILE_MAX });
+  const map = L.map(el, { scrollWheelZoom: false, worldCopyJump: true, maxZoom: TILE_MAX, zoomSnap: 0 });
+  const url = k => TILE.replace("NAME", "World_" + (isDark(el) ? "Dark" : "Light") + "_Gray_" + k);
   map.attributionControl.setPrefix(false);
-  L.tileLayer(TILE_BASE, { maxZoom: TILE_MAX, attribution: TILE_ATTR }).addTo(map);
-  L.tileLayer(TILE_LABELS, { maxZoom: TILE_MAX }).addTo(map);  // labels on top of the base
+  L.tileLayer(url("Base"), { maxZoom: TILE_MAX, attribution: TILE_ATTR }).addTo(map);
+  L.tileLayer(url("Reference"), { maxZoom: TILE_MAX }).addTo(map);  // labels on top of the base
   return map;
 }
-"""
+function fitView(map, el, b, pad) {  // global extents fill the map width instead of letterboxing
+  const world = b.getEast() - b.getWest() >= 350 && b.getNorth() - b.getSouth() >= 170;
+  world ? map.setView([15, 0], Math.log2(el.clientWidth / 256), { animate: false }) : map.fitBounds(b, { padding: pad });
+}
+""")
 
 # body of the async IIFE in the static cards; `id` and `data` ({bboxes?, features?}) are defined around it
 _MAP_JS = """
@@ -391,11 +477,12 @@ const el = document.getElementById(id), fallback = el.innerHTML;
 let map, ro;
 try {
   const L = await leaflet();
-  el.innerHTML = ""; el.style.height = "260px";
+  el.innerHTML = "";
   map = basemap(L, el);
   const tip = s => { const d = document.createElement("div"); d.textContent = s; return d; };  // no innerHTML
   const group = L.featureGroup().addTo(map);
-  const style = { color: "#1d4ed8", weight: 1, fillColor: "#3b82f6" };
+  const ACC = tok(el, "--sv-accent", "#1976d2"), HL = tok(el, "--sv-hl", "#f57c00");
+  const style = { color: ACC, weight: 1, fillColor: ACC };
   const bboxes = data.bboxes || [];
   bboxes.forEach((b, i) => {
     const spans = b[0] <= b[2] ? [[b[0], b[2]]] : [[b[0], 180], [-180, b[2]]];  // antimeridian
@@ -404,7 +491,7 @@ try {
         .bindTooltip(tip("[" + b.map(v => v.toFixed(2)).join(", ") + "]")).addTo(group);
   });
   if (data.features) {
-    const base = { ...style, opacity: 1, fillOpacity: 0.25 }, hl = { color: "#f97316", weight: 2, opacity: 1, fillOpacity: 0.45 };
+    const base = { ...style, opacity: 1, fillOpacity: 0.05 }, hl = { color: HL, fillColor: HL, weight: 2, opacity: 1, fillOpacity: 0.45 };
     const layers = [], rows = {}, http = u => /^https?:\\/\\//i.test(u || "");
     (el.closest(".sc") || document).querySelectorAll("tr[data-i]").forEach(r => rows[r.dataset.i] = r);  // list rows, if any
     const row = (i, c, on) => rows[i] && rows[i].classList.toggle(c, on);
@@ -428,27 +515,26 @@ try {
       for (const [k, v] of Object.entries(p.props || {})) add("div", k + ": " + v);
       if (http(p.href)) { const a = add("a", "item JSON"); a.href = p.href; a.target = "_blank"; a.rel = "noopener"; }
       pop.setLatLng(layers[i].getBounds().getCenter()).setContent(box).openOn(map);  // closes the previous popup first
-      sel = i; row(i, "selected", true); paint();
+      sel = i; row(i, "sel", true); paint();
       const r = rows[i], c = r && r.closest(".il");
       if (scroll && c) c.scrollTop += r.getBoundingClientRect().top - c.getBoundingClientRect().top - (c.clientHeight - r.offsetHeight) / 2;  // list only, not the page
     };
-    map.on("popupclose", () => { if (sel != null) row(sel, "selected", false); sel = null; paint(); });
+    map.on("popupclose", () => { if (sel != null) row(sel, "sel", false); sel = null; paint(); });
     L.geoJSON(data.features, { style: base, onEachFeature: (f, l) => {
       const i = f.properties.i; layers[i] = l;
       l.bindTooltip(tip(f.properties.t)).on({ mouseover: () => hover(i, true), mouseout: () => hover(i, false), click: () => open(i, true) });
       if (rows[i]) rows[i].onmouseenter = () => hover(i, true), rows[i].onmouseleave = () => hover(i, false), rows[i].onclick = () => open(i);
     } }).addTo(group);
   }
-  const world = bboxes.some(b => b[2] - b[0] >= 350 && b[3] - b[1] >= 170);
   let fitted = false;
-  const fit = () => { map.fitBounds(world ? [[-90, -180], [90, 180]] : group.getBounds(), { padding: [12, 12] }); fitted = true; };
+  const fit = () => { fitView(map, el, group.getBounds(), [12, 12]); fitted = true; };
   if (el.clientWidth > 0) fit();  // zero-size (hidden) containers would zoom to max, so wait for a size
   ro = new ResizeObserver(() => { map.invalidateSize(); if (!fitted && el.clientWidth > 0) fit(); });
   ro.observe(el);
 } catch (err) {  // keep the SVG fallback
   if (ro) ro.disconnect();
   if (map) map.remove();
-  el.innerHTML = fallback; el.style.height = "";
+  el.innerHTML = fallback;
 }
 """
 
@@ -477,13 +563,19 @@ def _map_html(data: dict, fallback_svg: str) -> str:
     """Container holding the SVG fallback, plus a script that swaps in a Leaflet map when JS can run."""
     uid = f"stacmap-{uuid.uuid4().hex}"
     return (
-        f'<div id="{uid}">{fallback_svg}</div>'
+        f'<div id="{uid}" class="map">{fallback_svg}</div>'
         f"<script>(async()=>{{const id={_json(uid)},data={_json(data)};{_LEAFLET_JS}{_MAP_JS}}})()</script>"
     )
 
 
+_ICON = "<svg viewBox='0 0 16 16' fill='none' stroke='currentColor' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'>{}</svg>"
+_SEARCH_SVG = _ICON.format("<circle cx='7' cy='7' r='4.5'/><path d='M10.5 10.5 14 14'/>")
+_COPY_SVG = _ICON.format("<rect x='5.5' y='5.5' width='8' height='8' rx='1.5'/><path d='M10.5 5.5V3.5a1 1 0 0 0-1-1h-6a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2'/>")
+_CHECK_SVG = _ICON.format("<path d='M3 8.5 6.5 12 13 4.5'/>")
+
+
 # ------------------------------------------------------------ interactive selector
-_ESM = _LEAFLET_JS + """
+_ESM = _LEAFLET_JS + f"const COPY = {json.dumps(_COPY_SVG)}, CHECK = {json.dumps(_CHECK_SVG)};" + """
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const DAY = 864e5, ms = s => Date.parse(s), ymd = t => new Date(t).toISOString().slice(0, 10);  // UTC day strings
 const rb = b => [[b[1], b[0]], [b[3], b[2]]];  // [w, s, e, n] -> Leaflet bounds
@@ -495,33 +587,48 @@ const HINT = {
 
 async function render({ model, el }) {
   el.classList.add("stacsel");
+  el.style.colorScheme = isDark(el) ? "dark" : "light";  // native date picker / select popups follow the theme
   el.innerHTML = `
-    <div class="stacsel-bar">
-      <button type="button" class="stacsel-draw bb">Draw bbox</button>
-      <button type="button" class="stacsel-draw pg">Draw polygon</button>
-      <button type="button" class="stacsel-draw sm rs">Reset</button>
-      <span class="stacsel-hint"></span>
-    </div>
-    <div class="stacsel-map"></div>
-    <div class="stacsel-row">
-      <label>Start<input type="date" class="d0"></label>
-      <label>End<input type="date" class="d1"></label>
-      <span class="stacsel-span"></span>
-    </div>
-    <div class="stacsel-sl"><div class="stacsel-fill"></div><input type="range" class="r0" min="0" step="1"><input type="range" class="r1" min="0" step="1"></div>
-    <div class="stacsel-tk"><span class="t0"></span><span class="t1"></span></div>
-    <div class="stacsel-pre">
-      <button type="button" class="stacsel-draw sm" data-n="7">Last 7d</button>
-      <button type="button" class="stacsel-draw sm" data-n="30">30d</button>
-      <button type="button" class="stacsel-draw sm" data-n="365">1y</button>
-      <button type="button" class="stacsel-draw sm" data-n="0">All</button>
-    </div>
-    <div class="stacsel-opts">
-      <label class="cc">Max cloud cover<input type="range" class="cc" min="0" max="100" step="5"><span class="ccv"></span></label>
-      <span class="stacsel-sels"></span>
-    </div>
-    <div class="stacsel-err"></div>
-    <pre class="stacsel-code"></pre>`;
+    <div class="sg">
+      <div class="stacsel-map">
+        <div class="stacsel-tools">
+          <span class="stacsel-seg">
+            <button type="button" class="bb">\u25A2 Bbox</button>
+            <button type="button" class="pg">\u2B20 Polygon</button>
+            <button type="button" class="rs">\u21BA Reset</button>
+          </span>
+          <span class="stacsel-hint"></span>
+        </div>
+      </div>
+      <div class="stacsel-panel">
+        <div>
+          <p class="lbl">Date range</p>
+          <div class="stacsel-row">
+            <label>Start<input type="date" class="d0"></label>
+            <label>End<input type="date" class="d1"></label>
+            <span class="stacsel-span"></span>
+          </div>
+          <div class="stacsel-sl"><div class="stacsel-fill"></div><input type="range" class="r0" min="0" step="1"><input type="range" class="r1" min="0" step="1"></div>
+          <div class="stacsel-tk"><span class="t0"></span><span class="t1"></span></div>
+          <div class="stacsel-pre"><span class="stacsel-seg">
+            <button type="button" data-n="7">7 d</button>
+            <button type="button" data-n="30">30 d</button>
+            <button type="button" data-n="365">1 y</button>
+            <button type="button" data-n="0">All</button>
+          </span></div>
+          <div class="stacsel-err"></div>
+        </div>
+        <div class="stacsel-opts">
+          <p class="lbl">Filters</p>
+          <div class="stacsel-row">
+            <label class="cc"><span>Max cloud cover &middot; <span class="ccv"></span></span><input type="range" class="cc" min="0" max="100" step="5"></label>
+            <span class="stacsel-sels"></span>
+          </div>
+        </div>
+        <div><p class="lbl">Search call</p><div class="stacsel-cw"><pre class="stacsel-code"></pre>
+          <button type="button" class="stacsel-cp" aria-label="Copy search call"></button></div></div>
+      </div>
+    </div>`;
   const q = s => el.querySelector(s);
   const err = q(".stacsel-err"), bb = q(".bb"), pg = q(".pg"), hint = q(".stacsel-hint");
   const d0 = q(".d0"), d1 = q(".d1"), r0 = q(".r0"), r1 = q(".r1"), cc = q("input.cc"), sels = q(".stacsel-sels");
@@ -530,13 +637,16 @@ async function render({ model, el }) {
     const mn = model.get("min_date") || "1980-01-01", mx = model.get("max_date") || ymd(Date.now());
     return [mn, mx, Math.max((ms(mx) - ms(mn)) / DAY, 1)];
   };
-  const code = q(".stacsel-code"), mapEl = q(".stacsel-map");
+  const code = q(".stacsel-code"), mapEl = q(".stacsel-map"), tools = q(".stacsel-tools");
+  for (const t of ["mousedown", "click", "dblclick", "touchstart"]) tools.addEventListener(t, e => e.stopPropagation());  // not map input
   const pt = p => "[" + p.map(v => v.toFixed(2)).join(", ") + "]";
   let ext, sel, pl, map, mode = "";  // rectangles + polygon, created once the map is up
   function draw() {
     const b = model.get("bbox"), poly = model.get("polygon"), cloud = model.get("cloud_cover"), flt = model.get("filters");
     if (sel) {
       ext.setBounds(rb(model.get("extent"))); sel.setBounds(rb(b));
+      const whole = b.every((v, i) => Math.abs(v - model.get("extent")[i]) < 1e-6);  // nothing drawn yet: outline only
+      sel.setStyle({ opacity: whole ? 0 : 1, fillOpacity: whole ? 0 : 0.18 });
       pl.setLatLngs(poly.map(p => [p[1], p[0]]));
       (poly.length ? sel : pl).remove(); (poly.length ? pl : sel).addTo(map);
     }
@@ -558,7 +668,7 @@ async function render({ model, el }) {
     const hasCloud = model.get("has_cloud");
     q("label.cc").style.display = hasCloud ? "" : "none";
     q(".stacsel-opts").style.display = hasCloud || sels.children.length ? "" : "none";
-    cc.value = cloud; q(".ccv").textContent = cloud >= 100 ? "any" : `\\u2264 ${cloud}%`;
+    cc.value = cloud; cc.style.setProperty("--p", cloud + "%"); q(".ccv").textContent = cloud >= 100 ? "any" : `\\u2264 ${cloud}%`;
     sels.querySelectorAll("select").forEach(s => { s.value = flt[s.dataset.k] || ""; });
     const query = {};
     if (cloud < 100) query["eo:cloud_cover"] = { lte: cloud };
@@ -566,7 +676,7 @@ async function render({ model, el }) {
     const where = poly.length
       ? `intersects={"type": "Polygon", "coordinates": [[${poly.concat([poly[0]]).map(pt).join(", ")}]]}`
       : `bbox=${pt(b)}`;
-    code.textContent = `search(\\n  ${where},\\n  datetime="${d0.value}/${d1.value}",${Object.keys(query).length ? `\\n  query=${JSON.stringify(query)},` : ""}\\n)`;
+    code.textContent = `search(\\n  ${where},\\n  datetime="${d0.value}/${d1.value}",${Object.keys(query).length ? `\\n  query=${JSON.stringify(query).replace(/":/g, '": ').replace(/,"/g, ', "')},` : ""}\\n)`;
   }
   const setDate = (k, v) => { model.set(k, v); model.save_changes(); draw(); };
   d0.addEventListener("change", () => setDate("start", d0.value));
@@ -580,11 +690,20 @@ async function render({ model, el }) {
     n ? setRange(ymd(Math.max(ms(mx) - n * DAY, ms(mn))), mx) : setRange(model.get("min_date"), mx);
   }));
   cc.addEventListener("input", () => setDate("cloud_cover", +cc.value));
+  const cp = q(".stacsel-cp");
+  cp.innerHTML = COPY;
+  cp.addEventListener("click", async () => {
+    const s = code.textContent;
+    try { await navigator.clipboard.writeText(s); } catch {  // clipboard API can be blocked (e.g. VS Code output iframes)
+      const t = document.createElement("textarea"); t.value = s; el.append(t); t.select(); document.execCommand("copy"); t.remove(); }
+    cp.innerHTML = CHECK; cp.classList.add("ok");
+    setTimeout(() => { cp.innerHTML = COPY; cp.classList.remove("ok"); }, 1200);
+  });
   function buildSels() {  // one <select> per filter option
     sels.innerHTML = "";
     for (const [k, vals] of Object.entries(model.get("filter_options"))) {
       const lab = document.createElement("label"), s = document.createElement("select");
-      lab.append(k.split(":").pop(), s); s.dataset.k = k;
+      lab.append(k.split(":").pop().replace(/_/g, " "), s); s.dataset.k = k;
       for (const v of ["", ...vals]) s.add(new Option(v || "any", v));
       s.addEventListener("change", () => {
         const f = { ...model.get("filters") };
@@ -601,14 +720,18 @@ async function render({ model, el }) {
 
   const L = await leaflet();
   map = basemap(L, mapEl);
-  const none = { interactive: false }, style = { ...none, color: "#1d4ed8", weight: 1, fillColor: "#3b82f6", fillOpacity: 0.3 };
-  ext = L.rectangle(rb(model.get("extent")), { ...none, color: "#6b7280", weight: 1, dashArray: "4 3", fill: false }).addTo(map);
+  const ACC = tok(mapEl, "--sv-accent", "#1976d2");
+  const none = { interactive: false }, style = { ...none, color: ACC, weight: 1, fillColor: ACC, fillOpacity: 0.3 };
+  ext = L.rectangle(rb(model.get("extent")), { ...none, color: tok(mapEl, "--sv-muted", "#888"), weight: 1, dashArray: "4 3", fill: false }).addTo(map);
   sel = L.rectangle(rb(model.get("bbox")), style).addTo(map);
   pl = L.polygon([], style);
-  const tmp = L.layerGroup().addTo(map), rubber = L.polyline([], { ...none, color: "#1d4ed8", weight: 1.5, dashArray: "4 3" });
+  const tmp = L.layerGroup().addTo(map), rubber = L.polyline([], { ...none, color: ACC, weight: 1.5, dashArray: "4 3" });
   draw();
   let fitted = false;
-  const fit = () => { map.fitBounds(ext.getBounds(), { padding: [10, 10] }); fitted = true; };
+  const fit = () => {  // open on the current selection when one was drawn, else the whole extent
+    const drawn = model.get("polygon").length ? pl : sel.options.opacity ? sel : ext;
+    fitView(map, mapEl, drawn.getBounds(), drawn === ext ? [10, 10] : [40, 40]); fitted = true;
+  };
   if (mapEl.clientWidth > 0) fit();  // zero-size (hidden) containers would zoom to max, so wait for a size
   const ro = new ResizeObserver(() => { map.invalidateSize(); if (!fitted && mapEl.clientWidth > 0) fit(); });
   ro.observe(mapEl);
@@ -652,7 +775,7 @@ async function render({ model, el }) {
     if (verts.length >= 3 && px(e.latlng).distanceTo(px(verts[0])) <= 8) return done();
     if (verts.length && px(e.latlng).distanceTo(px(verts[verts.length - 1])) <= 2) return;  // 2nd click of a double-click
     verts.push(e.latlng); rubber.setLatLngs([...verts, e.latlng]);
-    if (verts.length === 1) L.circleMarker(e.latlng, { ...none, radius: 5, color: "#1d4ed8", fillOpacity: 1 }).addTo(tmp);
+    if (verts.length === 1) L.circleMarker(e.latlng, { ...none, radius: 5, color: ACC, fillOpacity: 1 }).addTo(tmp);
   });
   map.on("dblclick", () => { if (mode === "poly") done(); });
   const finish = () => { if (!anchor) return; model.save_changes(); setMode(""); };
@@ -664,44 +787,56 @@ async function render({ model, el }) {
 export default { render };
 """
 
-_WIDGET_CSS = """
-.stacsel{font:13px/1.4 var(--jp-ui-font-family,system-ui,sans-serif);border:1px solid rgba(128,128,128,.4);
-  border-radius:8px;padding:10px;max-width:640px;color:var(--vscode-editor-foreground,inherit)}
-.vscode-dark .stacsel,[data-vscode-theme-kind*=dark] .stacsel{color-scheme:dark}  /* VS Code's widget host keeps light --jp-* colours */
-.stacsel-bar{display:flex;align-items:center;gap:8px;margin-bottom:6px;flex-wrap:wrap}
-.stacsel-draw{cursor:pointer;font:inherit;padding:2px 10px;border:1px solid rgba(128,128,128,.6);
-  border-radius:6px;background:transparent;color:inherit}
-.stacsel-draw.on{background:#3b82f6;border-color:#1d4ed8;color:#fff}
-.stacsel-hint{font-size:11px;opacity:.6}
-.stacsel-map{height:300px;border:1px solid rgba(128,128,128,.4);border-radius:4px}
-.stacsel input[type=date],.stacsel select{font:inherit;color:inherit;background:transparent;box-sizing:border-box;height:26px;
-  border:1px solid rgba(128,128,128,.6);border-radius:6px;padding:2px 6px;color-scheme:light dark}
-.stacsel input[type=date]:focus-visible,.stacsel select:focus-visible{outline:2px solid #3b82f6;outline-offset:1px}
-.stacsel input[type=date].bad{border-color:#dc2626}
-.stacsel-row{display:flex;gap:12px;margin-top:8px;align-items:center;flex-wrap:wrap}
-.stacsel-row label,.stacsel-opts label{display:flex;align-items:center;gap:6px;font-size:12px}
-.stacsel-row .stacsel-span{margin-left:auto;font-size:12px;opacity:.7;min-width:56px;text-align:right}
-.stacsel-sl{position:relative;height:20px;margin-top:6px}
-.stacsel-sl::before{content:"";position:absolute;left:7px;right:7px;top:8px;height:4px;border-radius:2px;background:rgba(128,128,128,.3)}
-.stacsel-fill{position:absolute;top:8px;height:4px;border-radius:2px;background:#3b82f6}
-.stacsel-sl input{position:absolute;left:0;top:0;width:100%;height:20px;margin:0;padding:0;background:none;
+_WIDGET_CSS = _ROOT + """
+.stacsel .sg{display:grid;grid-template-columns:minmax(0,3fr) minmax(0,2fr);gap:20px}
+.stacsel-map{min-height:340px;border:1px solid var(--sv-border);border-radius:3px;position:relative}
+@container (max-width:720px){.stacsel .sg{grid-template-columns:minmax(0,1fr)}.stacsel-map{aspect-ratio:16/10;min-height:240px}}
+.stacsel-tools{position:absolute;z-index:500;top:10px;left:54px;right:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;pointer-events:none}
+.stacsel-tools>*{pointer-events:auto}
+.stacsel-hint{font-size:11px;color:var(--sv-muted);background:color-mix(in srgb,var(--sv-bg) 85%,transparent);padding:2px 6px;border-radius:3px;pointer-events:none}
+.stacsel-seg{display:inline-flex;border:1px solid var(--sv-border-strong);border-radius:4px;overflow:hidden;background:var(--sv-bg)}
+.stacsel-seg button{font:inherit;font-size:12px;color:var(--sv-fg);background:none;border:0;padding:4px 10px;cursor:pointer}
+.stacsel-seg button+button{border-left:1px solid var(--sv-border-strong)}
+.stacsel-seg button.on{background:var(--sv-accent);color:#fff}.stacsel-seg button:hover:not(.on){background:var(--sv-alt)}
+.stacsel-panel{display:flex;flex-direction:column;gap:14px;min-width:0}
+.stacsel-row{display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap}
+.stacsel label{display:flex;flex-direction:column;gap:3px;font-size:11px;color:var(--sv-muted)}
+.stacsel input[type=date],.stacsel select{""" + _IN + """}
+.stacsel input[type=date]:focus,.stacsel select:focus{""" + _IN_FOCUS + """}
+.stacsel input[type=date].bad{border-color:var(--sv-err)}
+.stacsel-row .stacsel-span{margin-left:auto;font-size:12px;color:var(--sv-muted);padding-bottom:5px;min-width:56px;text-align:right}
+.stacsel-sl{position:relative;height:18px;margin-top:12px}
+.stacsel-sl::before{content:"";position:absolute;left:7px;right:7px;top:7px;height:4px;border-radius:2px;background:var(--sv-alt)}
+.stacsel-fill{position:absolute;top:7px;height:4px;border-radius:2px;background:var(--sv-accent)}
+.stacsel-sl input{position:absolute;left:0;top:0;width:100%;height:18px;margin:0;padding:0;background:none;
   pointer-events:none;-webkit-appearance:none;appearance:none}
-.stacsel-sl input::-webkit-slider-runnable-track{height:20px;background:none}
-.stacsel-sl input::-moz-range-track{height:20px;background:none}
+.stacsel-sl input::-webkit-slider-runnable-track{height:18px;background:none}
+.stacsel-sl input::-moz-range-track{height:18px;background:none}
 .stacsel-sl input::-webkit-slider-thumb{-webkit-appearance:none;pointer-events:auto;box-sizing:border-box;width:14px;height:14px;
-  margin-top:3px;border-radius:50%;background:#3b82f6;border:2px solid #fff;box-shadow:0 0 0 1px #1d4ed8;cursor:pointer}
+  margin-top:2px;border-radius:50%;background:var(--sv-bg);border:2px solid var(--sv-accent);cursor:pointer}
 .stacsel-sl input::-moz-range-thumb{pointer-events:auto;box-sizing:border-box;width:14px;height:14px;
-  border-radius:50%;background:#3b82f6;border:2px solid #fff;box-shadow:0 0 0 1px #1d4ed8;cursor:pointer}
-.stacsel-tk{display:flex;justify-content:space-between;font-size:11px;opacity:.6}
-.stacsel-pre{display:flex;gap:6px;margin-top:6px}
-.stacsel-opts{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-top:8px}
-.stacsel-opts .ccv{min-width:36px;opacity:.7}
+  border-radius:50%;background:var(--sv-bg);border:2px solid var(--sv-accent);cursor:pointer}
+.stacsel-tk{display:flex;justify-content:space-between;font-size:11px;color:var(--sv-faint);margin-top:2px}
+.stacsel-pre{margin-top:12px}
+.stacsel-opts label.cc{flex:1 1 180px}
+.stacsel input.cc{-webkit-appearance:none;appearance:none;width:100%;height:18px;margin:4px 0 5px;padding:0;background:none;cursor:pointer}
+.stacsel input.cc::-webkit-slider-runnable-track{height:4px;border-radius:2px;
+  background:linear-gradient(to right,var(--sv-accent) var(--p,100%),var(--sv-alt) var(--p,100%))}
+.stacsel input.cc::-moz-range-track{height:4px;border-radius:2px;background:var(--sv-alt)}
+.stacsel input.cc::-moz-range-progress{height:4px;border-radius:2px;background:var(--sv-accent)}
+.stacsel input.cc::-webkit-slider-thumb{-webkit-appearance:none;box-sizing:border-box;width:14px;height:14px;margin-top:-5px;
+  border-radius:50%;background:var(--sv-bg);border:2px solid var(--sv-accent)}
+.stacsel input.cc::-moz-range-thumb{box-sizing:border-box;width:14px;height:14px;border-radius:50%;background:var(--sv-bg);border:2px solid var(--sv-accent)}
+.stacsel input.cc:focus-visible{outline:none}.stacsel input.cc:focus-visible::-webkit-slider-thumb{box-shadow:0 0 0 3px color-mix(in srgb,var(--sv-accent) 30%,transparent)}
+.stacsel-cw{position:relative}
+.stacsel-cp{position:absolute;top:6px;right:6px;display:inline-flex;padding:4px;border:1px solid var(--sv-border);border-radius:3px;
+  background:var(--sv-bg);color:var(--sv-muted);cursor:pointer;opacity:.7}
+.stacsel-cp svg{width:14px;height:14px}.stacsel-cw:hover .stacsel-cp,.stacsel-cp:focus-visible{opacity:1}
+.stacsel-cp:hover,.stacsel-cp.ok{color:var(--sv-accent);border-color:var(--sv-accent)}
 .stacsel-sels{display:contents}
-.stacsel-draw.sm{font-size:11px;padding:1px 8px}
-.stacsel .leaflet-container .leaflet-control-attribution{font-size:9px;line-height:1.2;padding:0 4px;background:rgba(255,255,255,.6)}
-.stacsel-err{color:#dc2626;font-size:12px;min-height:14px;margin-top:4px}
-.stacsel-code{margin:6px 0 0;padding:6px 8px;background:rgba(128,128,128,.12);border-radius:6px;
-  font-family:var(--jp-code-font-family,monospace);font-size:11.5px;white-space:pre-wrap}
+.stacsel-err{color:var(--sv-err);font-size:12px;margin-top:6px}.stacsel-err:empty{display:none}
+.stacsel-code{margin:0;padding:8px 10px;background:var(--sv-code-bg);border:1px solid var(--sv-border);border-radius:2px;
+  font:12px/1.5 var(--sv-mono);white-space:pre-wrap;overflow-wrap:anywhere;color:var(--sv-fg)}
 """
 
 if anywidget is not None:
@@ -743,8 +878,8 @@ class Items(pystac.ItemCollection):
         spans = [_item_span(i) for i in items]
         los = [lo for lo, _ in spans if lo]
         his = [hi or lo for lo, hi in spans if lo]
-        note = " <span class='m'>max_items reached: results may be truncated</span>" if n and n == self._limit else ""
-        rng = f"<div class='m'>{_day(min(los))} to {_day(max(his))}</div>" if los else ""
+        note = "max_items reached: results may be truncated" if n and n == self._limit else ""
+        rng = f"{_day(min(los))} &rarr; {_day(max(his))}" if los else ""
         bboxes = [i.bbox for i in items[:500] if i.bbox]
         when = lambda i, lo, hi: _day(lo) if i.datetime else f"{_day(lo)} to {_day(hi)}"
         feats, rows = [], ""
@@ -763,15 +898,19 @@ class Items(pystac.ItemCollection):
             if thumb := _thumb(i):
                 f["thumb"] = thumb
             feats.append({"type": "Feature", "geometry": i.geometry, "properties": f})
+            bar = "" if cc is None else f"<span class='cb'><i style='width:{min(max(cc, 0), 100):.0f}%'></i></span>{cc:.0f}%"
             rows += (
-                f"<tr data-i='{k}'><td>{html.escape(i.id)}</td><td class='m nw'>{w}</td>"
-                f"<td class='m nw'>{'' if cc is None else f'{cc:.0f}% cloud'}</td></tr>"
+                f"<tr data-i='{k}'><td class='id' title='{html.escape(i.id)}'>{html.escape(i.id)}</td><td class='m nw'>{w}</td>"
+                f"<td class='m nw'{'' if cc is None else f' title=\'{cc:.0f}% cloud\''}>{bar}</td></tr>"
             )
         mp = _map_html({"features": feats}, _svg_map(bboxes, view=_items_view(bboxes))) if feats or bboxes else ""
-        lst = f"<div class='il'><table><tr><th>id</th><th>date</th><th>cloud</th></tr>{rows}</table></div>" if rows else ""
+        lst = (f"<div class='il'><table class='tb'><thead><tr><th>id</th><th>date</th><th>cloud</th></tr></thead>"
+               f"<tbody>{rows}</tbody></table></div>" if rows else "")
+        meta = " &middot; ".join(x for x in (note, rng) if x)
         return (
-            f"{_CSS}<div class='sc'><h4>{n} items{note}</h4>{rng}"
-            f"<div class='row2'><div class='mp'>{mp}</div>{lst}</div></div>"
+            f"{_CSS}<div class='sc'><div class='hd'><span class='ty'>Items</span><span class='tt'>{n} items</span>"
+            f"<span class='mt'>{meta}</span></div>"
+            f"<div class='grid eq'><div class='mp'>{mp}</div>{lst}</div></div>"
         )
 
 
@@ -818,9 +957,9 @@ class CollectionView:
         t0, t1 = interval[0], interval[1]
         y0, left, width = _bar_span(t0, t1)
         temporal = (
-            f"<div class='bar'><div style='left:{left:.1f}%;width:{width:.1f}%'></div></div>"
+            f"<p class='lbl'>Temporal extent</p><div class='bar'><div style='left:{left:.1f}%;width:{width:.1f}%'></div></div>"
             f"<div class='tk'><span>{y0}</span><span>{dt.datetime.now(_UTC).year}</span></div>"
-            f"<div>{_day(t0) or 'open'} to {_day(t1) or 'open'}</div>"
+            f"<div class='dt'>{_day(t0) or 'open'} &rarr; {_day(t1) or 'open'}</div>"
         )
         bboxes = e.spatial.bboxes or []
         head = {
@@ -832,14 +971,16 @@ class CollectionView:
         if bboxes:
             data = {"bboxes": [list(_bbox4(b)) for b in bboxes]}
             mp = f"<div class='mp'>{_map_html(data, _svg_map(bboxes))}</div>"
+        meta = html.escape(" \u00b7 ".join(str(x) for x in (c.id, c.license) if x))
         parts = [
-            f"<h4>{html.escape(c.title or c.id)}</h4>",
+            f"<div class='hd'><span class='ty'>STAC Collection</span><span class='tt'>{html.escape(c.title or c.id)}</span>"
+            f"<span class='mt'>{meta}</span></div>",
             _desc_html(c.description),
-            f"<div class='row'>{mp}<div class='info'><b>Temporal extent</b>{temporal}{_table(head)}</div></div>",
+            f"<div class='grid{'' if mp else ' one'}'>{mp}<div class='info'>{temporal}<p class='lbl'>Details</p>{_table(head)}</div></div>",
         ]
         summaries = c.summaries.to_dict() if getattr(c, "summaries", None) else {}
         if summaries:
-            parts.append(f"<details><summary>Summaries ({len(summaries)})</summary>{_table(summaries)}</details>")
+            parts.append(f"<details><summary>Summaries <span>{len(summaries)}</span></summary>{_table(summaries)}</details>")
         ia = c.extra_fields.get("item_assets") or {}
         if ia:
             ia = {k: v if isinstance(v, dict) else {"title": str(v)} for k, v in ia.items()}
@@ -943,6 +1084,108 @@ def _cached_collections(key: str, catalog: Any, refresh: bool = False) -> list[p
     return cols
 
 
+def _kw_desc(view: CollectionView) -> tuple[list, str]:
+    """Keywords and description, read from the raw dict when unparsed (no parsing)."""
+    if view._raw is not None:
+        return view._raw.get("keywords") or [], view._raw.get("description") or ""
+    return view._parsed.keywords or [], view._parsed.description or ""
+
+
+def _search_text(attr: str, view: CollectionView) -> str:
+    """Text matched by the overview search box."""
+    kw, desc = _kw_desc(view)
+    return " ".join([attr, view._id, view._title or "", *map(str, kw), desc])
+
+
+def _tooltip(view: CollectionView, n: int = 400) -> str:
+    """Hover text for an overview row: title, then the description cut to ~n chars."""
+    _, desc = _kw_desc(view)
+    desc = " ".join(desc.split())
+    if len(desc) > n:
+        desc = desc[:n].rsplit(" ", 1)[0] + "\u2026"
+    return f"{view._title or view._id}\n\n{desc}" if desc else view._title or view._id
+
+
+_IMG_TYPES = ("image/png", "image/jpeg", "image/webp", "image/gif")
+
+
+def _col_thumb(view: CollectionView) -> str | None:
+    """Collection preview image URL (http(s) PNG/JPEG/...): thumbnail-role asset first, else any image asset."""
+    if view._raw is not None:
+        assets = list((view._raw.get("assets") or {}).values())
+    else:
+        assets = [a.to_dict() for a in view._parsed.assets.values()]
+    imgs = [a for a in assets if isinstance(a, dict) and _is_http(a.get("href") or "") and (
+        a.get("type") in _IMG_TYPES or a["href"].lower().split("?")[0].endswith((".png", ".jpg", ".jpeg", ".webp", ".gif")))]
+    a = next((a for a in imgs if "thumbnail" in (a.get("roles") or [])), imgs[0] if imgs else None)
+    return a and a["href"]
+
+
+# rows whose data-q contains every whitespace-separated term stay visible
+_FILTER_JS = """
+const el = document.getElementById(id), box = el.querySelector(".q"), inp = box.querySelector("input");
+const count = box.querySelector("span"), rows = [...el.querySelectorAll("tr[data-q]")];
+box.hidden = false;
+inp.oninput = () => {
+  const terms = inp.value.toLowerCase().split(/\\s+/).filter(Boolean);
+  let n = 0;
+  for (const r of rows) { const on = terms.every(t => r.dataset.q.includes(t)); r.hidden = !on; n += on; }
+  count.textContent = terms.length ? n + " of " + rows.length : "";
+};
+inp.onkeydown = e => { if (e.key === "Escape" && inp.value) { inp.value = ""; inp.oninput(); } };
+const copy = s => navigator.clipboard ? navigator.clipboard.writeText(s) : Promise.reject();
+const fallback = s => {  // clipboard API can be blocked (e.g. VS Code output iframes)
+  const t = document.createElement("textarea"); t.value = s; el.append(t); t.select(); document.execCommand("copy"); t.remove(); };
+for (const b of el.querySelectorAll(".cp")) {
+  b.hidden = false;
+  b.onclick = async () => {
+    try { await copy(b.dataset.id); } catch { fallback(b.dataset.id); }
+    const svg = b.innerHTML; b.innerHTML = CHECK; b.classList.add("ok");
+    setTimeout(() => { b.innerHTML = svg; b.classList.remove("ok"); }, 1200);
+  };
+}
+// styled hover card instead of the native title tooltip (kept as the no-JS fallback)
+const tip = document.createElement("div"), tb = document.createElement("b"), td = document.createElement("div");
+const im = document.createElement("img");
+tip.className = "tip"; tip.hidden = true; tip.append(im, tb, td); el.append(tip);
+let last;  // last mouse event, to re-place the card once the image size is known
+im.onload = () => last && place(last);
+im.onerror = () => { im.hidden = true; };
+const view = () => {  // visible area: the window cut by every clipping ancestor (e.g. the notebook's scroll panel)
+  let v = { top: 0, left: 0, right: innerWidth, bottom: innerHeight };
+  for (let p = el.parentElement; p; p = p.parentElement) {
+    const s = getComputedStyle(p);
+    if (/auto|scroll|hidden|clip/.test(s.overflowY + s.overflowX)) {
+      const b = p.getBoundingClientRect();
+      v = { top: Math.max(v.top, b.top), left: Math.max(v.left, b.left), right: Math.min(v.right, b.right), bottom: Math.min(v.bottom, b.bottom) };
+    }
+  }
+  return v;
+};
+const place = e => {
+  last = e;
+  const r = tip.getBoundingClientRect(), v = view(), o = el.getBoundingClientRect();  // the card is the containing block (container-type)
+  let x = e.clientX + 14, y = e.clientY + 14;
+  if (x + r.width > v.right - 8) x = Math.max(v.left + 8, v.right - r.width - 8);
+  if (y + r.height > v.bottom - 8) y = Math.max(v.top + 8, e.clientY - r.height - 10);  // flip above the cursor, never past the top
+  tip.style.left = x - o.left + "px";
+  tip.style.top = y - o.top + "px";
+};
+for (const r of rows) {
+  const [t, ...d] = r.title.split("\\n\\n");
+  r.removeAttribute("title");
+  r.onmouseenter = e => {
+    tb.textContent = t; td.textContent = d.join(" "); td.hidden = !d.length;
+    const src = r.dataset.img || "";  // loaded only on hover
+    im.hidden = !src; if (src && im.getAttribute("src") !== src) im.src = src; else if (!src) im.removeAttribute("src");
+    tip.hidden = false; place(e);
+  };
+  r.onmousemove = place;
+  r.onmouseleave = () => { tip.hidden = true; };
+}
+"""
+
+
 class Collections:
     """Dot-notation access to the collections of a STAC catalog or API."""
 
@@ -980,11 +1223,29 @@ class Collections:
         return "\n".join(f"{k}: {v._title or ''}" for k, v in self._by_attr.items())
 
     def _repr_html_(self) -> str:
+        cat, n = self._catalog, len(self._by_attr)
+        title = getattr(cat, "title", None) or getattr(cat, "id", None) or "STAC catalog"
+        href = cat.get_self_href() if hasattr(cat, "get_self_href") else None
+        api = isinstance(cat, Client) and cat.conforms_to(ConformanceClasses.ITEM_SEARCH)
+        head = {"id": getattr(cat, "id", ""), "type": "STAC API (item search)" if api else "static catalog"}
+        if href:
+            head["url"] = href
+        img = lambda v: f" data-img='{html.escape(u)}'" if (u := _col_thumb(v)) else ""
         rows = "".join(
-            f"<tr><td><b>{html.escape(k)}</b></td><td class='m'>{html.escape(v._title or '')}</td></tr>"
+            f"<tr data-q='{html.escape(_search_text(k, v).lower())}' title='{html.escape(_tooltip(v))}'{img(v)}>"
+            f"<td class='ti'>{html.escape(v._title or '')}</td><td class='id'>{html.escape(k)}"
+            f"<button type='button' class='cp' data-id='{html.escape(k)}' aria-label='Copy id' hidden>{_COPY_SVG}</button></td></tr>"
             for k, v in self._by_attr.items()
         )
-        return f"{_CSS}<div class='sc'><table>{rows}</table></div>"
+        uid = f"stacq-{uuid.uuid4().hex}"
+        return (
+            f"{_CSS}<div class='sc' id='{uid}'><div class='hd'><span class='ty'>{'STAC API' if api else 'STAC catalog'}</span>"
+            f"<span class='tt'>{html.escape(title)}</span><span class='mt'>{n} collections</span></div>"
+            f"{_desc_html(getattr(cat, 'description', None))}<div style='margin-top:10px'>{_table(head)}</div>"
+            f"<div class='q' hidden>{_SEARCH_SVG}<input type='search' placeholder='Filter by title, id, keyword or description'>"
+            f"<span class='m'></span></div><div class='il ovl'><table class='tb ov'><tbody>{rows}</tbody></table></div></div>"
+            f"<script>(()=>{{const id={_json(uid)},CHECK={_json(_CHECK_SVG)};{_FILTER_JS}}})()</script>"
+        )
 
 
 def browse(source: Any, *, refresh: bool = False, **client_kwargs) -> Collections:
