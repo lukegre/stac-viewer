@@ -383,7 +383,16 @@ def _open_csv(items, assets, x=..., y=..., crs=None, **kwargs):
     pd = _need("pandas", "csv")
     x = _csv_coord(_CSV_X)(items, assets) if x is ... else x  # not passed: infer; None: plain DataFrame
     y = _csv_coord(_CSV_Y)(items, assets) if y is ... else y
-    out = [_csv_read(a.href, **kwargs) for _, a in _pairs(items, assets)]
+    out = []
+    for i, a in _pairs(items, assets):
+        df = _csv_read(a.href, **kwargs)
+        g = getattr(i, "geometry", None) or {}
+        if not (x and y) and g.get("type") == "Point":  # e.g. one station per item: keep its location
+            gpd = _need("geopandas", "csv")
+            lon, lat = g["coordinates"][:2]
+            df = gpd.GeoDataFrame(df.assign(item_id=i.id), geometry=gpd.points_from_xy([lon] * len(df), [lat] * len(df)),
+                                  crs="EPSG:4326")
+        out.append(df)
     df = out[0] if len(out) == 1 else pd.concat(out, ignore_index=True)
     if x and y:
         gpd = _need("geopandas", "csv")

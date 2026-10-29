@@ -117,6 +117,19 @@ def test_csv(tmp_path):
     assert list(tsv.open().columns) == ["a", "b"] and openers.opener_params("csv", list(tsv), ["d"])["x"]["default"] is None
 
 
+def test_csv_station_items_keep_location(tmp_path):
+    gpd = pytest.importorskip("geopandas")
+    items = []
+    for n, (lon, lat) in enumerate([(7.4, 46.9), (8.5, 47.4)]):
+        pd.DataFrame({"time": [1, 2], "t": [n, n]}).to_csv(tmp_path / f"s{n}.csv", sep=";", index=False)
+        it = item_with(f"st{n}", D(2020), d=(str(tmp_path / f"s{n}.csv"), "text/csv"))
+        it.geometry, it.bbox = {"type": "Point", "coordinates": [lon, lat]}, [lon, lat, lon, lat]
+        items.append(it)
+    df = Items(items).open()
+    assert isinstance(df, gpd.GeoDataFrame) and df.crs == "EPSG:4326" and len(df) == 4
+    assert list(df.item_id) == ["st0", "st0", "st1", "st1"] and list(df.geometry.x) == [7.4, 7.4, 8.5, 8.5]
+
+
 def test_csv_separators(tmp_path):
     for sep, name in [(";", "semi.csv"), (",", "comma.csv"), ("|", "pipe.csv")]:
         pd.DataFrame({"a": ["x,y", "z"], "b": [1, 2]}).to_csv(tmp_path / name, sep=sep, index=False)
