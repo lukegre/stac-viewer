@@ -3645,6 +3645,11 @@ cog = [
     { name = "xarray", version = "2025.6.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "xarray", version = "2026.9.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
 ]
+gdb = [
+    { name = "geopandas", version = "1.1.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "geopandas", version = "1.2.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
+    { name = "pyogrio" },
+]
 netcdf = [
     { name = "fsspec" },
     { name = "h5netcdf" },
@@ -3661,6 +3666,7 @@ open = [
     { name = "odc-stac" },
     { name = "pyarrow", version = "25.0.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "pyarrow", version = "26.0.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
+    { name = "pyogrio" },
     { name = "xarray", version = "2025.6.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "xarray", version = "2026.9.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "xpystac", version = "0.2.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
@@ -3711,14 +3717,16 @@ requires-dist = [
     { name = "anywidget", marker = "extra == 'widget'", specifier = ">=0.9" },
     { name = "fsspec", marker = "extra == 'netcdf'", specifier = ">=2023.1" },
     { name = "fsspec", marker = "extra == 'zarr'", specifier = ">=2023.1" },
+    { name = "geopandas", marker = "extra == 'gdb'", specifier = ">=0.14" },
     { name = "geopandas", marker = "extra == 'parquet'", specifier = ">=0.14" },
     { name = "h5netcdf", marker = "extra == 'netcdf'", specifier = ">=1.3" },
     { name = "odc-stac", specifier = ">=0.5.3" },
     { name = "odc-stac", marker = "extra == 'cog'", specifier = ">=0.3.10" },
     { name = "pyarrow", marker = "extra == 'parquet'", specifier = ">=14" },
+    { name = "pyogrio", marker = "extra == 'gdb'", specifier = ">=0.7" },
     { name = "pystac", specifier = ">=1.10" },
     { name = "pystac-client", specifier = ">=0.8" },
-    { name = "stac-viewer", extras = ["cog", "zarr", "netcdf", "parquet"], marker = "extra == 'open'" },
+    { name = "stac-viewer", extras = ["cog", "zarr", "netcdf", "parquet", "gdb"], marker = "extra == 'open'" },
     { name = "xarray", marker = "extra == 'cog'", specifier = ">=2024.1" },
     { name = "xarray", marker = "extra == 'netcdf'", specifier = ">=2024.1" },
     { name = "xarray", marker = "extra == 'zarr'", specifier = ">=2024.1" },
@@ -3726,7 +3734,7 @@ requires-dist = [
     { name = "xpystac", marker = "extra == 'zarr'", specifier = ">=0.2" },
     { name = "zarr", marker = "extra == 'zarr'", specifier = ">=2.16" },
 ]
-provides-extras = ["widget", "cog", "zarr", "netcdf", "parquet", "open"]
+provides-extras = ["widget", "cog", "zarr", "netcdf", "parquet", "gdb", "open"]
 
 [package.metadata.requires-dev]
 dev = [

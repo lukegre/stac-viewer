@@ -82,6 +82,20 @@ def test_geoparquet(tmp_path):
     assert type(Items([it(2, plain)]).open()) is pd.DataFrame
 
 
+def test_filegdb_zip(tmp_path):
+    gpd = pytest.importorskip("geopandas")
+    pytest.importorskip("pyogrio")
+    import shutil
+    from shapely.geometry import Point
+
+    g = gpd.GeoDataFrame({"a": [1.0, 2.0]}, geometry=[Point(0, 0), Point(1, 1)], crs=4326)
+    g.to_file(tmp_path / "t.gdb", layer="pts", driver="OpenFileGDB")
+    g.iloc[:1].to_file(tmp_path / "t.gdb", layer="one", driver="OpenFileGDB")
+    shutil.make_archive(str(tmp_path / "t.gdb"), "zip", root_dir=tmp_path, base_dir="t.gdb")
+    it = item_with("g", D(2020), d=(str(tmp_path / "t.gdb.zip"), "application/zip"))
+    df = Items([it]).open(layer="one")
+    assert isinstance(df, gpd.GeoDataFrame) and len(df) == 1
+
 def test_opener_override_and_user_registration():
     it = item_with("a", D(2020), d=("x.nc", "application/x-netcdf"))
     calls = []
@@ -136,6 +150,7 @@ def test_errors():
 @pytest.mark.parametrize("href", ["s3://b/a.zarr/", "https://h/a.zarr?sig=1"])
 def test_extension_match(href):
     assert openers._match(pystac.Asset(href)) == "zarr"
+    assert openers._match(pystac.Asset(href.replace(".zarr", ".gdb.zip").replace("zip/", "zip"))) == "filegdb"
 
 
 def test_collection_open_zarr(tmp_path):
