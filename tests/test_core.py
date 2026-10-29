@@ -173,6 +173,7 @@ def test_items_repr(cols):
     h = res._repr_html_()
     assert "<svg" in h and "4 items" in h and "12% cloud" in h
     assert "truncated" not in h
+    assert "2020-01-15 00:00:00 UTC" in h and "2019-12-01 00:00:00 UTC to 2020-02-01 00:00:00 UTC" in h
     assert repr(res) == "<Items n=4>"
     assert "truncated" in cols.alpha.search(max_items=2)._repr_html_()
 

@@ -93,6 +93,12 @@ def _day(d: dt.datetime | None) -> str:
     return d.strftime("%Y-%m-%d") if d else ""
 
 
+def _stamp(d: dt.datetime) -> str:
+    """'YYYY-MM-DD HH:MM:SS UTC' (naive datetimes are taken as UTC)."""
+    d = d.replace(tzinfo=_UTC) if d.tzinfo is None else d.astimezone(_UTC)
+    return d.strftime("%Y-%m-%d %H:%M:%S UTC")
+
+
 def _extent_defaults(col: pystac.Collection) -> tuple[list[float], str, str]:
     """Collection extent as (bbox, start 'YYYY-MM-DD', end 'YYYY-MM-DD')."""
     bboxes = col.extent.spatial.bboxes or [[-180, -90, 180, 90]]
@@ -200,10 +206,14 @@ _CSS = """<style>
 .sc .bar{position:relative;height:8px;background:rgba(128,128,128,.25);border-radius:4px;margin:6px 0 2px}
 .sc .bar>div{position:absolute;top:0;bottom:0;background:#3b82f6;border-radius:4px}
 .sc .nw{white-space:nowrap}
-.sc .il{max-height:260px;overflow:auto}.sc .il th{position:sticky;top:0;background:Canvas;text-align:left;font-weight:600}
-.sc .il tr[data-i]{cursor:pointer}.sc .il tr.hov,.sc .il tr.selected{background:rgba(59,130,246,.15)}
-.sc .il tr.selected{font-weight:600}
-.sc .pop{display:flex;gap:8px;align-items:flex-start}.sc .pop img{display:block;max-width:160px;max-height:160px}
+.sc .row2{margin-top:8px}.sc .row2 .il{margin-top:8px}.sc .il table{width:100%}
+.sc .il{max-height:calc(16 * (1.4em + 2px));overflow:auto}.sc .il th{position:sticky;top:0;background:Canvas;text-align:left;font-weight:600}
+.sc .il tr[data-i]{cursor:pointer}.sc .il tr.hov{background:rgba(59,130,246,.15)}
+.sc .il tr.selected{background:rgba(59,130,246,.3);box-shadow:inset 3px 0 #f97316;font-weight:600}
+.sc .pop{display:flex;gap:8px;align-items:flex-start}
+.sc .pop img{display:block;flex:none;width:160px;max-height:160px;object-fit:contain}
+.sc .pop>div{min-width:0;max-width:220px}
+.sc .pop b{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .sc .tk{display:flex;justify-content:space-between;font-size:11px;opacity:.6}
 </style>"""
 
@@ -338,29 +348,38 @@ try {
         .bindTooltip(tip("[" + b.map(v => v.toFixed(2)).join(", ") + "]")).addTo(group);
   });
   if (data.features) {
-    const base = { ...style, fillOpacity: 0.25 }, hl = { color: "#f97316", weight: 2, fillOpacity: 0.45 };
+    const base = { ...style, opacity: 1, fillOpacity: 0.25 }, hl = { color: "#f97316", weight: 2, opacity: 1, fillOpacity: 0.45 };
     const layers = [], rows = {}, http = u => /^https?:\\/\\//i.test(u || "");
     (el.closest(".sc") || document).querySelectorAll("tr[data-i]").forEach(r => rows[r.dataset.i] = r);  // list rows, if any
     const row = (i, c, on) => rows[i] && rows[i].classList.toggle(c, on);
-    const hover = (i, on) => { layers[i].setStyle(on ? hl : base); if (on) layers[i].bringToFront(); row(i, "hov", on); };
-    let sel;
-    const open = i => {
+    const dim = { opacity: 0.25, fillOpacity: 0.06 };
+    let sel, hv;  // selected (clicked) and hovered item
+    const paint = () => layers.forEach((l, j) => l.setStyle(j === sel || j === hv ? hl : hv != null ? dim : base));
+    const hover = (i, on) => {
+      if (hv != null) row(hv, "hov", false);
+      hv = on ? i : null;
+      if (on) { layers[i].bringToFront(); row(i, "hov", true); }
+      paint();
+    };
+    const open = (i, scroll) => {
       const p = layers[i].feature.properties, box = document.createElement("div"), d = document.createElement("div"), add = (t, s) => {
         const e = document.createElement(t); e.textContent = s; d.appendChild(e); return e; };
-      box.className = "pop"; box.appendChild(d); add("b", p.id); add("div", p.when);
-      for (const [k, v] of Object.entries(p.props || {})) add("div", k + ": " + v);
-      if (http(p.href)) { const a = add("a", "item JSON"); a.href = p.href; a.target = "_blank"; a.rel = "noopener"; }
       const pop = L.popup({ maxWidth: 400, autoPanPaddingTopLeft: [50, 10] });  // clear of the zoom control
+      box.className = "pop";
       if (http(p.thumb)) {  // image beside the text; re-pan once its size is known
         const m = document.createElement("img"); m.onload = () => pop.update(); m.src = p.thumb; m.alt = p.id; box.appendChild(m); }
-      if (sel != null) row(sel, "selected", false);
-      sel = i; row(i, "selected", true);
-      pop.setLatLng(layers[i].getBounds().getCenter()).setContent(box).openOn(map);
+      box.appendChild(d); add("b", p.id).title = p.id; add("div", p.time);
+      for (const [k, v] of Object.entries(p.props || {})) add("div", k + ": " + v);
+      if (http(p.href)) { const a = add("a", "item JSON"); a.href = p.href; a.target = "_blank"; a.rel = "noopener"; }
+      pop.setLatLng(layers[i].getBounds().getCenter()).setContent(box).openOn(map);  // closes the previous popup first
+      sel = i; row(i, "selected", true); paint();
+      const r = rows[i], c = r && r.closest(".il");
+      if (scroll && c) c.scrollTop += r.getBoundingClientRect().top - c.getBoundingClientRect().top - (c.clientHeight - r.offsetHeight) / 2;  // list only, not the page
     };
-    map.on("popupclose", () => { if (sel != null) row(sel, "selected", false); sel = null; });
+    map.on("popupclose", () => { if (sel != null) row(sel, "selected", false); sel = null; paint(); });
     L.geoJSON(data.features, { style: base, onEachFeature: (f, l) => {
       const i = f.properties.i; layers[i] = l;
-      l.bindTooltip(tip(f.properties.t)).on({ mouseover: () => hover(i, true), mouseout: () => hover(i, false), click: () => open(i) });
+      l.bindTooltip(tip(f.properties.t)).on({ mouseover: () => hover(i, true), mouseout: () => hover(i, false), click: () => open(i, true) });
       if (rows[i]) rows[i].onmouseenter = () => hover(i, true), rows[i].onmouseleave = () => hover(i, false), rows[i].onclick = () => open(i);
     } }).addTo(group);
   }
@@ -680,7 +699,8 @@ class Items(pystac.ItemCollection):
             if cc is not None:
                 props["cloud cover"] = f"{cc:.0f}%"
             href = i.get_self_href()
-            f = {"i": k, "t": f"{i.id} \u00b7 {w}", "id": i.id, "when": w, "props": props}
+            tm = _stamp(i.datetime) if i.datetime else f"{_stamp(lo)} to {_stamp(hi or lo)}" if lo else ""
+            f = {"i": k, "t": f"{i.id} \u00b7 {w}", "id": i.id, "when": w, "time": tm, "props": props}
             if href and _is_http(href):
                 f["href"] = href
             if thumb := _thumb(i):
@@ -694,7 +714,7 @@ class Items(pystac.ItemCollection):
         lst = f"<div class='il'><table><tr><th>id</th><th>date</th><th>cloud</th></tr>{rows}</table></div>" if rows else ""
         return (
             f"{_CSS}<div class='sc'><h4>{n} items{note}</h4>{rng}"
-            f"<div class='row'><div class='mp'>{mp}</div><div class='info'>{lst}</div></div></div>"
+            f"<div class='row2'><div class='mp'>{mp}</div>{lst}</div></div>"
         )
 
 
