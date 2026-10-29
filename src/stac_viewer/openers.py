@@ -306,7 +306,7 @@ def _open_geoparquet(items, assets, **kwargs):
 
 
 def _gdb_layers(items, assets):
-    """``[(name, geometry type or None)]`` of the first selected geodatabase."""
+    """``[(name, geometry type or None)]`` of the first selected geodatabase / GeoPackage."""
     pyogrio = _need("pyogrio", "gdb")
     return [tuple(r) for r in pyogrio.list_layers(_pairs(items, assets)[0][1].href)]
 
@@ -318,6 +318,12 @@ def _gdb_default_layer(items, assets):
 
 
 @register_opener(
+    "gpkg",
+    media_types=["application/geopackage+sqlite3"],
+    extensions=[".gpkg"],
+    params={"layer": Param(lambda i, a: [n for n, _ in _gdb_layers(i, a)], _gdb_default_layer)},
+)
+@register_opener(
     "filegdb",
     media_types=["application/x.filegdb+zip"],  # used by data.geo.admin.ch
     extensions=[".gdb.zip"],
@@ -326,11 +332,19 @@ def _gdb_default_layer(items, assets):
 def _open_filegdb(items, assets, **kwargs):
     gpd = _need("geopandas", "gdb")
     pd = _need("pandas", "gdb")
-    _need("pyogrio", "gdb")  # GDAL's OpenFileGDB driver reads zipped geodatabases directly
+    _need("pyogrio", "gdb")  # GDAL reads GeoPackages and zipped geodatabases directly
     pairs = _pairs(items, assets)
     if kwargs.get("layer") is None:
         kwargs["layer"] = _gdb_default_layer(items, assets)
     out = [gpd.read_file(a.href, **kwargs) for _, a in pairs]
+    return out[0] if len(out) == 1 else pd.concat(out, ignore_index=True)
+
+
+@register_opener("geojson", media_types=["application/geo+json"], extensions=[".geojson"])
+def _open_geojson(items, assets, **kwargs):
+    gpd = _need("geopandas", "gdb")
+    pd = _need("pandas", "gdb")
+    out = [gpd.read_file(a.href, **kwargs) for _, a in _pairs(items, assets)]
     return out[0] if len(out) == 1 else pd.concat(out, ignore_index=True)
 
 

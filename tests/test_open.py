@@ -101,6 +101,38 @@ def test_filegdb_zip(tmp_path):
     assert spec["kind"] == "choice" and spec["choices"] == ["meta", "pts", "one"] and spec["default"] == "pts"
 
 
+def test_gpkg(tmp_path):
+    gpd = pytest.importorskip("geopandas")
+    pytest.importorskip("pyogrio")
+    from shapely.geometry import Point
+
+    g = gpd.GeoDataFrame({"a": [1.0, 2.0]}, geometry=[Point(0, 0), Point(1, 1)], crs=4326)
+    gpd.GeoDataFrame({"s": ["ok"]}).to_file(tmp_path / "t.gpkg", layer="meta", driver="GPKG")  # no geometry
+    g.to_file(tmp_path / "t.gpkg", layer="pts", driver="GPKG")
+    g.iloc[:1].to_file(tmp_path / "t.gpkg", layer="one", driver="GPKG")
+    by_ext = item_with("g", D(2020), d=(str(tmp_path / "t.gpkg"), None))
+    by_type = item_with("h", D(2021), d=(str(tmp_path / "t.gpkg"), "application/geopackage+sqlite3"))
+    assert openers.resolve([by_ext], "d")[0] == openers.resolve([by_type], "d")[0] == "gpkg"
+    assert len(Items([by_ext]).open()) == 2  # first layer with geometry
+    assert len(Items([by_ext, by_type]).open(layer="one")) == 2
+    spec = openers.opener_params("gpkg", [by_ext], ["d"])["layer"]
+    assert sorted(spec["choices"]) == ["meta", "one", "pts"] and spec["default"] == "pts"
+
+
+def test_geojson(tmp_path):
+    gpd = pytest.importorskip("geopandas")
+    pytest.importorskip("pyogrio")
+    from shapely.geometry import Point
+
+    for n in range(2):
+        gpd.GeoDataFrame({"a": [n]}, geometry=[Point(n, n)], crs=4326).to_file(tmp_path / f"g{n}.geojson")
+    items = [item_with("a", D(2020), d=(str(tmp_path / "g0.geojson"), "application/geo+json")),
+             item_with("b", D(2021), d=(str(tmp_path / "g1.geojson"), None))]
+    assert openers.resolve(items, "d")[0] == "geojson" and openers.opener_params("geojson", items, ["d"]) == {}
+    df = Items(items).open()
+    assert isinstance(df, gpd.GeoDataFrame) and list(df["a"]) == [0, 1]
+
+
 def test_csv(tmp_path):
     gpd = pytest.importorskip("geopandas")
     for n in range(2):
