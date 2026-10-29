@@ -120,9 +120,19 @@ def _(items, settings):
     return (out,)
 
 
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ## Median mosaic
+
+    So far everything is lazy: `out` is a dask-backed dataset and no pixels have been read. The button below triggers the read and computes a per-pixel median over time, which removes most clouds. The RGB plot scales reflectance by 15000 and masks no-data pixels.
+    """)
+    return
+
+
 @app.cell
 def _(mo):
-    run = mo.ui.run_button(label="Compute median mosaic")
+    run =mo.ui.run_button(label="Compute median mosaic")
     run
     return (run,)
 
