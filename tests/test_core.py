@@ -143,14 +143,27 @@ def test_max_items(cols):
     assert len(cols.alpha.search(max_items=None)) == 4
 
 
-def test_clear_selection(cols):
+def test_search_with_selector(cols):
     col = cols.alpha
     sel = col.selector()
     sel.bbox = [6.0, 6.0, 9.0, 9.0]
-    assert ids(col.search()) == ["a2"]
-    assert ids(col.search(bbox=[0, 0, 3, 3])) == ["a1", "a3", "deep"]  # explicit wins
-    col.clear_selection()
-    assert len(col.search()) == 4
+    assert ids(col.search(sel)) == ["a2"]
+    assert ids(col.search(sel, bbox=[0, 0, 3, 3])) == ["a1", "a3", "deep"]  # explicit wins
+    assert len(col.search()) == 4  # selector not remembered
+    sel.bbox = [-10.0, -10.0, 10.0, 10.0]
+    sel.start, sel.end = "2021-01-01", "2021-12-31"
+    assert ids(col.search(sel)) == ["a2"]
+    assert ids(col.search(sel, datetime="2020-01-15")) == ["a1", "a3"]
+
+
+def test_selector_dates(cols):
+    sel = cols.alpha.selector()
+    assert sel.min_date == "2000-01-01" and sel.max_date == dt.datetime.now(UTC).strftime("%Y-%m-%d")
+
+
+def test_attribution_reduced():
+    assert core._TILE_ATTR == "&copy; Esri, OSM"
+    assert "setPrefix(false)" in core._LEAFLET_JS and "stacmap-style" in core._LEAFLET_JS
 
 
 # ---------------------------------------------------------------- rendering

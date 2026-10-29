@@ -17,10 +17,9 @@ from stac_viewer import browse
 cat = browse("https://earth-search.aws.element84.com/v1")  # API URL, catalog.json path/URL, or pystac object
 cat                                                         # table of collections
 col = cat.sentinel_2_l2a                                    # HTML card: extent map, temporal bar, metadata
-col.selector()                                              # draw bbox + pick dates (needs the widget extra)
-items = col.search()                                        # uses the selection -> Items (HTML summary)
+sel = col.selector(); sel                                   # draw bbox + pick dates (needs the widget extra)
+items = col.search(sel)                                     # uses the selection -> Items (HTML summary)
 items = col.search(bbox=[8.4, 47.3, 8.7, 47.5], datetime="2026-06-01/2026-06-30", max_items=50)
-col.clear_selection()                                       # search() stops using the selector
 ```
 
 Extra keyword arguments to `browse` go to `pystac_client.Client.open`, e.g.
