@@ -14,19 +14,24 @@ Usage (Jupyter / JupyterLab / VS Code / Colab)::
     cat.sentinel_2_l2a.clear_selection()  # search() stops using the selector
 
     browse(url, modifier=planetary_computer.sign_inplace)  # extra kwargs go to pystac_client.Client.open
+    browse(url, refresh=True)             # ignore the collection cache (refreshed anyway after 5 days)
 
 Dependencies: pystac, pystac-client; anywidget (optional, only for ``selector()``).
 """
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
 import html
 import json
 import keyword
 import math
+import os
 import re
+import time
 import uuid
 from importlib.resources import files
+from pathlib import Path
 from typing import Any, Iterator
 
 import pystac
@@ -44,6 +49,7 @@ __all__ = ["browse", "Collections", "CollectionView", "Items", "SearchSelector"]
 
 _LAND = files("stac_viewer").joinpath("land.txt").read_text()  # SVG path, 0..360 x 0..180 (x=lon+180, y=90-lat)
 _UTC = dt.timezone.utc
+CACHE_MAX_AGE = dt.timedelta(days=5)
 
 
 # --------------------------------------------------------------------------- helpers
@@ -552,14 +558,48 @@ class CollectionView:
         return Items(found, clone_items=False, limit=max_items)
 
 
+# --------------------------------------------------------------------------- collection cache
+def _fetch_collections(catalog: Any) -> list[pystac.Collection]:
+    return list(catalog.get_collections() if isinstance(catalog, Client) else catalog.get_all_collections())
+
+
+def _cache_dir() -> Path:
+    """``$STAC_VIEWER_CACHE``, else ``$XDG_CACHE_HOME/stac-viewer``, else ``~/.cache/stac-viewer``."""
+    if os.environ.get("STAC_VIEWER_CACHE"):
+        return Path(os.environ["STAC_VIEWER_CACHE"])
+    return Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache") / "stac-viewer"
+
+
+def _cached_collections(key: str, catalog: Any, refresh: bool = False) -> list[pystac.Collection]:
+    """Collections of ``catalog``, read from a JSON cache keyed by ``key`` if younger than ``CACHE_MAX_AGE``."""
+    path = _cache_dir() / f"{hashlib.sha256(key.encode()).hexdigest()[:16]}.json"
+    if not refresh and path.exists() and time.time() - path.stat().st_mtime < CACHE_MAX_AGE.total_seconds():
+        try:
+            entries = json.loads(path.read_text())["collections"]
+            # self href passed separately so relative links (static catalogs) still resolve
+            return [pystac.Collection.from_dict(d, href=href) for href, d in entries]
+        except (OSError, ValueError, KeyError, TypeError, pystac.STACError):
+            pass  # unreadable cache: fetch again
+    cols = _fetch_collections(catalog)
+    entries = [[c.get_self_href(), c.to_dict(include_self_link=False, transform_hrefs=False)] for c in cols]
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps({"source": key, "collections": entries}))
+        tmp.replace(path)
+    except OSError:
+        pass  # caching is best effort
+    return cols
+
+
 class Collections:
     """Dot-notation access to the collections of a STAC catalog or API."""
 
-    def __init__(self, catalog: Any):
+    def __init__(self, catalog: Any, collections: list[pystac.Collection] | None = None):
         self._catalog = catalog
         self._by_attr: dict[str, CollectionView] = {}
         self._by_id: dict[str, CollectionView] = {}
-        cols = catalog.get_collections() if isinstance(catalog, Client) else catalog.get_all_collections()
+        cols = _fetch_collections(catalog) if collections is None else collections
         for c in cols:
             view = CollectionView(c, catalog)
             self._by_attr[_ident(c.id, set(self._by_attr))] = view
@@ -596,15 +636,20 @@ class Collections:
         return f"{_CSS}<div class='sc'><table>{rows}</table></div>"
 
 
-def browse(source: Any, **client_kwargs) -> Collections:
+def browse(source: Any, *, refresh: bool = False, **client_kwargs) -> Collections:
     """Open ``source`` (API URL, catalog.json path/URL, or pystac/pystac-client object).
 
     ``client_kwargs`` go to ``pystac_client.Client.open`` (e.g. ``modifier=``, ``headers=``).
+    For URL/path sources the collection list is cached on disk (see ``_cache_dir``) and
+    refetched when older than ``CACHE_MAX_AGE`` (5 days) or when ``refresh=True``.
     """
-    if isinstance(source, str):
-        source = source.rstrip("/").removesuffix("/collections")
-        if source.endswith(".json"):
-            source = pystac.Catalog.from_file(source)
-        else:
-            source = Client.open(source, **client_kwargs)
-    return Collections(source)
+    if not isinstance(source, str):
+        return Collections(source)
+    key = source = source.rstrip("/").removesuffix("/collections")
+    if "://" not in key:
+        key = os.path.abspath(key)
+    if source.endswith(".json"):
+        source = pystac.Catalog.from_file(source)
+    else:
+        source = Client.open(source, **client_kwargs)
+    return Collections(source, _cached_collections(key, source, refresh))
