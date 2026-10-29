@@ -17,7 +17,7 @@ from stac_viewer import browse
 cat = browse("https://earth-search.aws.element84.com/v1")  # API URL, catalog.json path/URL, or pystac object
 cat                                                         # table of collections
 col = cat.sentinel_2_l2a                                    # HTML card: extent map, temporal bar, metadata
-sel = col.selector(); sel                                   # draw bbox + pick dates (needs the widget extra)
+sel = col.selector(); sel                                   # draw bbox/polygon, pick dates, cloud cover + filters (needs the widget extra)
 items = col.search(sel)                                     # uses the selection -> Items (HTML summary)
 items = col.search(bbox=[8.4, 47.3, 8.7, 47.5], datetime="2026-06-01/2026-06-30", max_items=50)
 ```
@@ -30,7 +30,9 @@ Extra keyword arguments to `browse` go to `pystac_client.Client.open`, e.g.
 - **STAC APIs** (with item-search): server-side search; all `pystac_client` search kwargs
   (`query`, `filter`, `sortby`, ...) are passed through.
 - **Static catalogs** (`catalog.json`): collections are found recursively and items are filtered
-  client-side. Only `bbox`, `datetime`, `ids` and `max_items` are supported; anything else raises `TypeError`.
+  client-side. Only `bbox`, `intersects`, `datetime`, `ids`, `query` and `max_items` are supported; anything else
+  raises `TypeError`. `intersects` is approximated by the bounding box of the geometry, and `query` supports
+  `lt`, `lte`, `gt`, `gte`, `eq`, `neq` (items without the property are excluded).
 
 `datetime` accepts `"a/b"`, `"a"`, open ends (`"../b"`), `datetime`/`date` objects, or a `(start, end)` tuple.
 `search()` returns `max_items=1000` items by default; pass `max_items=None` for no limit.

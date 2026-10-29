@@ -26,6 +26,7 @@ import itertools
 import json
 import keyword
 import math
+import operator
 import os
 import re
 import time
@@ -54,6 +55,7 @@ _LAND = files("stac_viewer").joinpath("land.txt").read_text()  # SVG path, 0..36
 _UTC = dt.timezone.utc
 CACHE_MAX_AGE = dt.timedelta(days=5)
 _PAGE_LIMIT = 1000  # /collections page size; servers cap it at their own maximum
+_FILTER_KEYS = ("platform", "constellation", "sat:orbit_state", "sar:instrument_mode", "sar:product_type")
 
 
 # --------------------------------------------------------------------------- helpers
@@ -134,22 +136,42 @@ def _item_span(item: pystac.Item) -> tuple[dt.datetime | None, dt.datetime | Non
 
 # ------------------------------------------------------------- client-side search
 
-def _local_search(col: pystac.Collection, bbox=None, datetime=None, ids=None, max_items=None, **kwargs):
-    """Minimal bbox/datetime/ids filter for static catalogs (no STAC API available)."""
+_OPS = {"lt": operator.lt, "lte": operator.le, "gt": operator.gt, "gte": operator.ge, "eq": operator.eq, "neq": operator.ne}
+
+
+def _coords(c) -> list:
+    """Flatten nested GeoJSON coordinates to a list of positions."""
+    return [c] if isinstance(c[0], (int, float)) else [p for x in c for p in _coords(x)]
+
+
+def _local_search(col: pystac.Collection, bbox=None, datetime=None, ids=None, max_items=None, intersects=None,
+                  query=None, **kwargs):
+    """Minimal filter for static catalogs (no STAC API available).
+
+    ``intersects`` is approximated by the bounding box of the geometry's coordinates.
+    ``query`` supports lt, lte, gt, gte, eq, neq on item properties; items lacking the property are excluded.
+    """
     if kwargs:
         raise TypeError(
-            f"unsupported kwargs {', '.join(kwargs)}: static catalogs only support bbox, datetime, ids, max_items"
+            f"unsupported kwargs {', '.join(kwargs)}: static catalogs only support "
+            "bbox, intersects, datetime, ids, query, max_items"
         )
     t0, t1 = _dt_range(datetime)
+    boxes = [_bbox4(bbox)] if bbox else []
+    if intersects:
+        xs, ys = zip(*(p[:2] for p in _coords(intersects["coordinates"])))
+        boxes.append((min(xs), min(ys), max(xs), max(ys)))
     out = []
     for item in col.get_items(recursive=True):
         if ids and item.id not in ids:
             continue
-        if bbox and item.bbox:
+        if item.bbox:
             w, s, e, n = _bbox4(item.bbox)
-            qw, qs, qe, qn = _bbox4(bbox)
-            if e < qw or w > qe or n < qs or s > qn:
+            if any(e < qw or w > qe or n < qs or s > qn for qw, qs, qe, qn in boxes):
                 continue
+        p = item.properties
+        if any(k not in p or not all(_OPS[op](p[k], v) for op, v in conds.items()) for k, conds in (query or {}).items()):
+            continue
         if t0 or t1:
             lo, hi = _item_span(item)
             if lo is None:
@@ -388,13 +410,20 @@ _ESM = _LEAFLET_JS + """
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const DAY = 864e5, ms = s => Date.parse(s), ymd = t => new Date(t).toISOString().slice(0, 10);  // UTC day strings
 const rb = b => [[b[1], b[0]], [b[3], b[2]]];  // [w, s, e, n] -> Leaflet bounds
+const HINT = {
+  "": "Draw a bbox or a polygon on the map",
+  bbox: "Click, then drag on the map to set the bbox (Esc cancels)",
+  poly: "Click to add vertices; double-click or click the first vertex to finish (Esc cancels)",
+};
 
 async function render({ model, el }) {
   el.classList.add("stacsel");
   el.innerHTML = `
     <div class="stacsel-bar">
-      <button type="button" class="stacsel-draw">Draw bbox</button>
-      <span class="stacsel-hint">Click, then drag on the map to set the bbox</span>
+      <button type="button" class="stacsel-draw bb">Draw bbox</button>
+      <button type="button" class="stacsel-draw pg">Draw polygon</button>
+      <button type="button" class="stacsel-draw sm rs">Reset</button>
+      <span class="stacsel-hint"></span>
     </div>
     <div class="stacsel-map"></div>
     <div class="stacsel-row">
@@ -410,34 +439,57 @@ async function render({ model, el }) {
       <button type="button" class="stacsel-draw sm" data-n="365">1y</button>
       <button type="button" class="stacsel-draw sm" data-n="0">All</button>
     </div>
+    <div class="stacsel-opts">
+      <label class="cc">Max cloud cover<input type="range" class="cc" min="0" max="100" step="5"><span class="ccv"></span></label>
+      <span class="stacsel-sels"></span>
+    </div>
     <div class="stacsel-err"></div>
     <pre class="stacsel-code"></pre>`;
-  const err = el.querySelector(".stacsel-err"), btn = el.querySelector(".stacsel-draw");
-  const d0 = el.querySelector(".d0"), d1 = el.querySelector(".d1"), r0 = el.querySelector(".r0"), r1 = el.querySelector(".r1");
-  const fill = el.querySelector(".stacsel-fill"), span = el.querySelector(".stacsel-span");
+  const q = s => el.querySelector(s);
+  const err = q(".stacsel-err"), bb = q(".bb"), pg = q(".pg"), hint = q(".stacsel-hint");
+  const d0 = q(".d0"), d1 = q(".d1"), r0 = q(".r0"), r1 = q(".r1"), cc = q("input.cc"), sels = q(".stacsel-sels");
+  const fill = q(".stacsel-fill"), span = q(".stacsel-span");
   const axis = () => {  // slider axis: min_date (or 1980) .. max_date (or today), in days
     const mn = model.get("min_date") || "1980-01-01", mx = model.get("max_date") || ymd(Date.now());
     return [mn, mx, Math.max((ms(mx) - ms(mn)) / DAY, 1)];
   };
-  const code = el.querySelector(".stacsel-code"), mapEl = el.querySelector(".stacsel-map");
-  let ext, sel;  // rectangles, created once the map is up
+  const code = q(".stacsel-code"), mapEl = q(".stacsel-map");
+  const pt = p => "[" + p.map(v => v.toFixed(2)).join(", ") + "]";
+  let ext, sel, pl, map, mode = "";  // rectangles + polygon, created once the map is up
   function draw() {
-    const b = model.get("bbox");
-    if (sel) { ext.setBounds(rb(model.get("extent"))); sel.setBounds(rb(b)); }
+    const b = model.get("bbox"), poly = model.get("polygon"), cloud = model.get("cloud_cover"), flt = model.get("filters");
+    if (sel) {
+      ext.setBounds(rb(model.get("extent"))); sel.setBounds(rb(b));
+      pl.setLatLngs(poly.map(p => [p[1], p[0]]));
+      (poly.length ? sel : pl).remove(); (poly.length ? pl : sel).addTo(map);
+    }
     d0.value = model.get("start"); d1.value = model.get("end");
-    const [mn, mx, n] = axis();
+    const [mn, mx, n] = axis(), lo = model.get("min_date"), hi = model.get("max_date");
     d0.min = mn; d0.max = d1.value || mx; d1.min = d0.value || mn; d1.max = mx;
     const bad = d0.value && d1.value && d0.value > d1.value;
-    err.textContent = bad ? "Start must be before end" : "";
+    const out = v => v && ((lo && v < lo) || (hi && v > hi));
+    d0.classList.toggle("bad", !!(bad || out(d0.value))); d1.classList.toggle("bad", !!(bad || out(d1.value)));
+    err.textContent = bad ? "Start must be before end" : out(d0.value) || out(d1.value) ? "Date outside the collection's range" : "";
     const day = (v, dflt) => v ? clamp((ms(v) - ms(mn)) / DAY, 0, n) : dflt;
     r0.max = r1.max = n; r0.value = day(d0.value, 0); r1.value = day(d1.value, n);
     r0.style.zIndex = +r0.value > n / 2 ? 3 : 1;  // keep the handle with room to move on top
     const a = r0.value / n, c = Math.max(r1.value / n, a);
     fill.style.left = `calc(7px + (100% - 14px) * ${a})`; fill.style.width = `calc((100% - 14px) * ${c - a})`;
-    el.querySelector(".t0").textContent = mn; el.querySelector(".t1").textContent = mx;
+    q(".t0").textContent = mn; q(".t1").textContent = mx;
     const days = d0.value && d1.value && !bad ? (ms(d1.value) - ms(d0.value)) / DAY + 1 : 0;
     span.textContent = days ? `${days} day${days > 1 ? "s" : ""}` : "";
-    code.textContent = `search(\\n  bbox=[${b.map(v => v.toFixed(2)).join(", ")}],\\n  datetime="${d0.value}/${d1.value}",\\n)`;
+    const hasCloud = model.get("has_cloud");
+    q("label.cc").style.display = hasCloud ? "" : "none";
+    q(".stacsel-opts").style.display = hasCloud || sels.children.length ? "" : "none";
+    cc.value = cloud; q(".ccv").textContent = cloud >= 100 ? "any" : `\\u2264 ${cloud}%`;
+    sels.querySelectorAll("select").forEach(s => { s.value = flt[s.dataset.k] || ""; });
+    const query = {};
+    if (cloud < 100) query["eo:cloud_cover"] = { lte: cloud };
+    for (const [k, v] of Object.entries(flt)) query[k] = { eq: v };
+    const where = poly.length
+      ? `intersects={"type": "Polygon", "coordinates": [[${poly.concat([poly[0]]).map(pt).join(", ")}]]}`
+      : `bbox=${pt(b)}`;
+    code.textContent = `search(\\n  ${where},\\n  datetime="${d0.value}/${d1.value}",${Object.keys(query).length ? `\\n  query=${JSON.stringify(query)},` : ""}\\n)`;
   }
   const setDate = (k, v) => { model.set(k, v); model.save_changes(); draw(); };
   d0.addEventListener("change", () => setDate("start", d0.value));
@@ -450,39 +502,87 @@ async function render({ model, el }) {
     const [mn, mx] = axis(), n = +b.dataset.n;
     n ? setRange(ymd(Math.max(ms(mx) - n * DAY, ms(mn))), mx) : setRange(model.get("min_date"), mx);
   }));
-  model.on("change:bbox", draw); model.on("change:start", draw); model.on("change:end", draw); model.on("change:max_date", draw); model.on("change:min_date", draw);
-  draw();
+  cc.addEventListener("input", () => setDate("cloud_cover", +cc.value));
+  function buildSels() {  // one <select> per filter option
+    sels.innerHTML = "";
+    for (const [k, vals] of Object.entries(model.get("filter_options"))) {
+      const lab = document.createElement("label"), s = document.createElement("select");
+      lab.append(k.split(":").pop(), s); s.dataset.k = k;
+      for (const v of ["", ...vals]) s.add(new Option(v || "any", v));
+      s.addEventListener("change", () => {
+        const f = { ...model.get("filters") };
+        s.value ? f[k] = s.value : delete f[k];
+        setDate("filters", f);
+      });
+      sels.append(lab);
+    }
+    draw();
+  }
+  for (const k of ["bbox", "polygon", "start", "end", "max_date", "min_date", "cloud_cover", "filters", "has_cloud"]) model.on("change:" + k, draw);
+  model.on("change:filter_options", buildSels);
+  buildSels();
 
   const L = await leaflet();
-  const map = basemap(L, mapEl);
-  const none = { interactive: false };
+  map = basemap(L, mapEl);
+  const none = { interactive: false }, style = { ...none, color: "#1d4ed8", weight: 1, fillColor: "#3b82f6", fillOpacity: 0.3 };
   ext = L.rectangle(rb(model.get("extent")), { ...none, color: "#6b7280", weight: 1, dashArray: "4 3", fill: false }).addTo(map);
-  sel = L.rectangle(rb(model.get("bbox")), { ...none, color: "#1d4ed8", weight: 1, fillColor: "#3b82f6", fillOpacity: 0.3 }).addTo(map);
+  sel = L.rectangle(rb(model.get("bbox")), style).addTo(map);
+  pl = L.polygon([], style);
+  const tmp = L.layerGroup().addTo(map), rubber = L.polyline([], { ...none, color: "#1d4ed8", weight: 1.5, dashArray: "4 3" });
+  draw();
   let fitted = false;
   const fit = () => { map.fitBounds(ext.getBounds(), { padding: [10, 10] }); fitted = true; };
   if (mapEl.clientWidth > 0) fit();  // zero-size (hidden) containers would zoom to max, so wait for a size
   const ro = new ResizeObserver(() => { map.invalidateSize(); if (!fitted && mapEl.clientWidth > 0) fit(); });
   ro.observe(mapEl);
 
-  let drawing = false, anchor = null;
-  function setDrawing(on) {
-    drawing = on; anchor = null;
-    btn.classList.toggle("on", on);
-    mapEl.style.cursor = on ? "crosshair" : "";
-    map.dragging[on ? "disable" : "enable"]();
+  let anchor = null, verts = [];
+  function setMode(m) {
+    mode = m; anchor = null; verts = []; tmp.clearLayers(); rubber.setLatLngs([]); rubber.addTo(tmp);
+    bb.classList.toggle("on", m === "bbox"); pg.classList.toggle("on", m === "poly");
+    mapEl.style.cursor = m ? "crosshair" : ""; hint.textContent = HINT[m];
+    for (const h of [map.dragging, map.doubleClickZoom]) h[m ? "disable" : "enable"]();
   }
-  btn.addEventListener("click", () => setDrawing(!drawing));
-  map.on("mousedown", e => { if (drawing) anchor = e.latlng; });
+  setMode("");
+  bb.addEventListener("click", () => setMode(mode === "bbox" ? "" : "bbox"));
+  pg.addEventListener("click", () => setMode(mode === "poly" ? "" : "poly"));
+  q(".rs").addEventListener("click", () => {
+    setMode(""); model.set("polygon", []); model.set("bbox", [...model.get("extent")]); model.save_changes(); draw();
+  });
+  const px = p => map.latLngToContainerPoint(p);
+  function done() {
+    if (verts.length < 3) return;
+    const ring = verts.map(v => [clamp(v.lng, -180, 180), clamp(v.lat, -90, 90)]);
+    const xs = ring.map(p => p[0]), ys = ring.map(p => p[1]);
+    model.set("polygon", ring); model.set("bbox", [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)]);
+    model.save_changes(); setMode(""); draw();
+  }
+  map.on("mousedown", e => {
+    if (mode !== "bbox") return;
+    anchor = e.latlng;
+    if (model.get("polygon").length) { model.set("polygon", []); draw(); }
+  });
   map.on("mousemove", e => {
+    if (mode === "poly" && verts.length) rubber.setLatLngs([...verts, e.latlng]);
     if (!anchor) return;
     const a = anchor, p = e.latlng;
     model.set("bbox", [clamp(Math.min(a.lng, p.lng), -180, 180), clamp(Math.min(a.lat, p.lat), -90, 90),
                        clamp(Math.max(a.lng, p.lng), -180, 180), clamp(Math.max(a.lat, p.lat), -90, 90)]);
     draw();
   });
-  const finish = () => { if (!anchor) return; model.save_changes(); setDrawing(false); };
+  map.on("click", e => {
+    if (mode !== "poly") return;
+    if (verts.length >= 3 && px(e.latlng).distanceTo(px(verts[0])) <= 8) return done();
+    if (verts.length && px(e.latlng).distanceTo(px(verts[verts.length - 1])) <= 2) return;  // 2nd click of a double-click
+    verts.push(e.latlng); rubber.setLatLngs([...verts, e.latlng]);
+    if (verts.length === 1) L.circleMarker(e.latlng, { ...none, radius: 5, color: "#1d4ed8", fillOpacity: 1 }).addTo(tmp);
+  });
+  map.on("dblclick", () => { if (mode === "poly") done(); });
+  const finish = () => { if (!anchor) return; model.save_changes(); setMode(""); };
+  const esc = e => { if (e.key === "Escape" && mode) setMode(""); };
   window.addEventListener("mouseup", finish);  // also fires when released outside the map
-  return () => { window.removeEventListener("mouseup", finish); ro.disconnect(); };
+  window.addEventListener("keydown", esc);
+  return () => { window.removeEventListener("mouseup", finish); window.removeEventListener("keydown", esc); ro.disconnect(); };
 }
 export default { render };
 """
@@ -490,15 +590,19 @@ export default { render };
 _WIDGET_CSS = """
 .stacsel{font:13px/1.4 var(--jp-ui-font-family,system-ui,sans-serif);border:1px solid rgba(128,128,128,.4);
   border-radius:8px;padding:10px;max-width:640px;color:inherit}
-.stacsel-bar{display:flex;align-items:center;gap:8px;margin-bottom:6px}
+.stacsel-bar{display:flex;align-items:center;gap:8px;margin-bottom:6px;flex-wrap:wrap}
 .stacsel-draw{cursor:pointer;font:inherit;padding:2px 10px;border:1px solid rgba(128,128,128,.6);
   border-radius:6px;background:transparent;color:inherit}
 .stacsel-draw.on{background:#3b82f6;border-color:#1d4ed8;color:#fff}
 .stacsel-hint{font-size:11px;opacity:.6}
 .stacsel-map{height:300px;border:1px solid rgba(128,128,128,.4);border-radius:4px}
-.stacsel-row{display:flex;gap:8px;margin-top:8px}
-.stacsel-row label{flex:1;display:flex;flex-direction:column;font-size:12px;opacity:.85;gap:2px}
-.stacsel-row .stacsel-span{flex:0 0 auto;align-self:flex-end;font-size:12px;opacity:.7;min-width:56px;text-align:right}
+.stacsel input[type=date],.stacsel select{font:inherit;color:inherit;background:transparent;box-sizing:border-box;height:26px;
+  border:1px solid rgba(128,128,128,.6);border-radius:6px;padding:2px 6px;color-scheme:light dark}
+.stacsel input[type=date]:focus-visible,.stacsel select:focus-visible{outline:2px solid #3b82f6;outline-offset:1px}
+.stacsel input[type=date].bad{border-color:#dc2626}
+.stacsel-row{display:flex;gap:12px;margin-top:8px;align-items:center;flex-wrap:wrap}
+.stacsel-row label,.stacsel-opts label{display:flex;align-items:center;gap:6px;font-size:12px}
+.stacsel-row .stacsel-span{margin-left:auto;font-size:12px;opacity:.7;min-width:56px;text-align:right}
 .stacsel-sl{position:relative;height:20px;margin-top:6px}
 .stacsel-sl::before{content:"";position:absolute;left:7px;right:7px;top:8px;height:4px;border-radius:2px;background:rgba(128,128,128,.3)}
 .stacsel-fill{position:absolute;top:8px;height:4px;border-radius:2px;background:#3b82f6}
@@ -512,6 +616,9 @@ _WIDGET_CSS = """
   border-radius:50%;background:#3b82f6;border:2px solid #fff;box-shadow:0 0 0 1px #1d4ed8;cursor:pointer}
 .stacsel-tk{display:flex;justify-content:space-between;font-size:11px;opacity:.6}
 .stacsel-pre{display:flex;gap:6px;margin-top:6px}
+.stacsel-opts{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-top:8px}
+.stacsel-opts .ccv{min-width:36px;opacity:.7}
+.stacsel-sels{display:contents}
 .stacsel-draw.sm{font-size:11px;padding:1px 8px}
 .stacsel .leaflet-container .leaflet-control-attribution{font-size:9px;line-height:1.2;padding:0 4px;background:rgba(255,255,255,.6)}
 .stacsel-err{color:#dc2626;font-size:12px;min-height:14px;margin-top:4px}
@@ -522,11 +629,16 @@ _WIDGET_CSS = """
 if anywidget is not None:
 
     class SearchSelector(anywidget.AnyWidget):
-        """Draw a bbox and pick a date range; the values sync back to Python."""
+        """Draw a bbox or polygon, pick a date range and common filters; the values sync back to Python."""
 
         _esm = _ESM
         _css = _WIDGET_CSS
         bbox = traitlets.List(traitlets.Float(), default_value=[-180.0, -90.0, 180.0, 90.0]).tag(sync=True)
+        polygon = traitlets.List(traitlets.List(traitlets.Float()), default_value=[]).tag(sync=True)  # [[lon, lat], ...]
+        cloud_cover = traitlets.Int(100).tag(sync=True)  # max %, 100 = no filter
+        has_cloud = traitlets.Bool(False).tag(sync=True)
+        filters = traitlets.Dict({}).tag(sync=True)  # {property: chosen value}
+        filter_options = traitlets.Dict({}).tag(sync=True)  # {property: [values]}
         start = traitlets.Unicode("").tag(sync=True)
         end = traitlets.Unicode("").tag(sync=True)
         extent = traitlets.List(traitlets.Float(), default_value=[-180.0, -90.0, 180.0, 90.0]).tag(sync=True)
@@ -660,34 +772,53 @@ class CollectionView:
 
     # ---- selector + search
     def selector(self):
-        """Return an interactive bbox/date picker (show it, then pass it to ``search(sel)``)."""
+        """Return an interactive bbox/polygon/date/filter picker (show it, then pass it to ``search(sel)``)."""
         if SearchSelector is None:
             raise ImportError("selector() needs anywidget: pip install anywidget")
-        bbox, start, end = _extent_defaults(self._col)
-        return SearchSelector(bbox=bbox, extent=bbox, start=start, end=end, min_date=start, max_date=end)
+        col = self._col
+        bbox, start, end = _extent_defaults(col)
+        summ = col.summaries.to_dict()
+        has_cloud = "eo:cloud_cover" in summ or "eo:bands" in summ or any("/eo/" in u for u in col.stac_extensions or [])
+        opts = {
+            k: sorted(summ[k]) for k in _FILTER_KEYS
+            if isinstance(summ.get(k), list) and 2 <= len(summ[k]) <= 20 and all(isinstance(v, str) for v in summ[k])
+        }
+        return SearchSelector(bbox=bbox, extent=bbox, start=start, end=end, min_date=start, max_date=end,
+                              has_cloud=has_cloud, filter_options=opts)
 
-    def search(self, selector=None, *, bbox=None, datetime=None, ids=None, max_items=1000, **kwargs) -> Items:
-        """Search this collection. ``selector`` (from ``selector()``) supplies bbox/datetime; explicit arguments win.
+    def search(self, selector=None, *, bbox=None, intersects=None, datetime=None, ids=None, query=None,
+               max_items=1000, **kwargs) -> Items:
+        """Search this collection. ``selector`` (from ``selector()``) supplies the area (bbox or polygon),
+        datetime and query (cloud cover, filters); explicit arguments win (``query`` per key).
 
         STAC APIs: server-side search (extra kwargs go to ``pystac_client``). Static catalogs:
-        client-side bbox/datetime/ids filtering only. ``datetime`` takes 'a/b', 'a', '../b',
-        datetime/date objects, or a (start, end) tuple. ``max_items=None`` means no limit.
+        client-side bbox/intersects (bounding box only)/datetime/ids/query filtering only. ``intersects`` is a
+        GeoJSON geometry dict. ``datetime`` takes 'a/b', 'a', '../b', datetime/date objects, or a (start, end)
+        tuple. ``max_items=None`` means no limit.
         """
         if selector is not None:
-            if bbox is None:
-                bbox = list(selector.bbox)
+            if bbox is None and intersects is None:  # APIs reject bbox + intersects together
+                if selector.polygon:
+                    ring = [list(p) for p in selector.polygon]
+                    intersects = {"type": "Polygon", "coordinates": [ring + [ring[0]]]}
+                else:
+                    bbox = list(selector.bbox)
             if datetime is None and (selector.start or selector.end):
                 datetime = f"{selector.start or '..'}/{selector.end or '..'}"
+            sq = {k: {"eq": v} for k, v in selector.filters.items()}
+            if selector.cloud_cover < 100:
+                sq["eo:cloud_cover"] = {"lte": selector.cloud_cover}
+            query = {**sq, **(query or {})}
         cat = self._catalog
         if isinstance(cat, Client) and cat.conforms_to(ConformanceClasses.ITEM_SEARCH):
             t0, t1 = _dt_range(datetime)
             search = cat.search(
-                collections=[self._col.id], bbox=bbox, datetime=(t0, t1) if t0 or t1 else None,
-                ids=ids, max_items=max_items, **kwargs,
+                collections=[self._col.id], bbox=bbox, intersects=intersects, datetime=(t0, t1) if t0 or t1 else None,
+                ids=ids, query=query or None, max_items=max_items, **kwargs,
             )
             found = list(search.items())
         else:
-            found = _local_search(self._col, bbox, datetime, ids, max_items, **kwargs)
+            found = _local_search(self._col, bbox, datetime, ids, max_items, intersects, query, **kwargs)
         return Items(found, clone_items=False, limit=max_items)
 
 

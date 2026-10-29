@@ -134,7 +134,7 @@ def test_ids_filter(cols):
 
 
 def test_unsupported_kwarg(cols):
-    with pytest.raises(TypeError, match="foo.*bbox, datetime, ids, max_items"):
+    with pytest.raises(TypeError, match="foo.*bbox, intersects, datetime, ids, query, max_items"):
         cols.alpha.search(foo=1)
 
 
@@ -435,3 +435,83 @@ def test_items_card_item_data_cannot_break_out():
 def test_collection_card_still_renders_map():
     h = core.CollectionView(make_collection("x"), None)._repr_html_()
     assert 'id="stacmap-' in h and "<tr data-i" not in h
+
+# ---------------------------------------------------------------- polygon / query options
+class FakeClient(pystac_client.Client):
+    """Records pystac_client search kwargs; pretends item-search is available."""
+
+    def __init__(self):
+        self.calls = []
+
+    def conforms_to(self, c):
+        return True
+
+    def search(self, **kw):
+        self.calls.append(kw)
+        return type("S", (), {"items": lambda s: iter([])})()
+
+
+@pytest.fixture
+def api(cols, monkeypatch):
+    monkeypatch.setattr(core, "Client", FakeClient)
+    view = core.CollectionView(cols.alpha._col, FakeClient())
+    return view, view._catalog.calls
+
+
+def test_polygon_search_uses_intersects(cols, api):
+    view, calls = api
+    sel = cols.alpha.selector()
+    sel.polygon = [[0.0, 0.0], [4.0, 0.0], [4.0, 4.0]]
+    sel.bbox = [0.0, 0.0, 4.0, 4.0]
+    view.search(sel)
+    assert calls[0]["bbox"] is None
+    assert calls[0]["intersects"] == {"type": "Polygon", "coordinates": [[[0, 0], [4, 0], [4, 4], [0, 0]]]}
+    view.search(sel, bbox=[1, 1, 2, 2])  # explicit bbox wins, no intersects
+    assert calls[1]["bbox"] == [1, 1, 2, 2] and calls[1]["intersects"] is None
+    view.search(intersects={"type": "Point", "coordinates": [1, 1]})
+    assert calls[2]["intersects"]["type"] == "Point"
+
+
+def test_polygon_static_filters_by_bounds(cols):
+    sel = cols.alpha.selector()
+    sel.polygon = [[6.0, 6.0], [9.0, 6.0], [9.0, 9.0]]
+    assert ids(cols.alpha.search(sel)) == ["a2"]
+    geom = {"type": "Polygon", "coordinates": [[[0, 0], [3, 0], [3, 3], [0, 0]]]}
+    assert ids(cols.alpha.search(intersects=geom)) == ["a1", "a3", "deep"]
+
+
+def test_selector_query(cols, api):
+    view, calls = api
+    sel = cols.alpha.selector()
+    sel.cloud_cover, sel.filters = 20, {"platform": "s2a"}
+    view.search(sel)
+    assert calls[0]["query"] == {"platform": {"eq": "s2a"}, "eo:cloud_cover": {"lte": 20}}
+    view.search(sel, query={"eo:cloud_cover": {"lte": 5}})  # explicit wins per key
+    assert calls[1]["query"] == {"platform": {"eq": "s2a"}, "eo:cloud_cover": {"lte": 5}}
+    view.search()
+    assert calls[2]["query"] is None
+
+
+def test_selector_query_static(cols):
+    sel = cols.alpha.selector()
+    sel.cloud_cover = 50
+    assert ids(cols.alpha.search(sel)) == ["a1"]  # items without the property are excluded
+
+
+def test_local_query_ops(cols):
+    q = lambda **kw: ids(cols.alpha.search(query={"eo:cloud_cover": kw}))
+    assert q(lt=12.0) == [] and q(lte=12.0) == ["a1"] and q(gt=12.0) == [] and q(gte=12.0) == ["a1"]
+    assert q(eq=12.0) == ["a1"] and q(neq=12.0) == []  # missing property never matches
+    assert q(gte=1, lt=50) == ["a1"]
+
+
+def test_selector_summaries(catalog):
+    col = catalog.get_child("alpha")
+    col.summaries = pystac.Summaries({"platform": ["b", "a"], "constellation": ["x"], "sat:orbit_state": [1, 2], "eo:bands": [{}]})
+    sel = browse(catalog).alpha.selector()
+    assert sel.has_cloud and sel.filter_options == {"platform": ["a", "b"]}
+    col.summaries = pystac.Summaries({})
+    col.stac_extensions = ["https://stac-extensions.github.io/eo/v1.1.0/schema.json"]
+    assert browse(catalog).alpha.selector().has_cloud
+    col.stac_extensions = []
+    assert not browse(catalog).alpha.selector().has_cloud
