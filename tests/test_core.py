@@ -516,3 +516,32 @@ def test_selector_summaries(catalog):
     assert browse(catalog).alpha.selector().has_cloud
     col.stac_extensions = []
     assert not browse(catalog).alpha.selector().has_cloud
+
+
+def test_overview_header_and_search(catalog):
+    cols = browse(catalog)
+    h = cols._repr_html_()
+    assert f"{len(cols)} collections" in h and "static catalog" in h
+    assert "type='search'" in h and h.count("</script>") == 1
+    assert "data-q='alpha alpha alpha desc alpha'" in h  # attr, id, title, (no keywords), description
+
+
+def test_overview_row_tooltip(catalog):
+    h = browse(catalog)._repr_html_()
+    assert "title='Alpha\n\ndesc alpha'" in h
+    long = core.CollectionView({"id": "x", "title": "X", "description": "word " * 200}, None)
+    tip = core._tooltip(long)
+    assert tip.startswith("X\n\nword") and tip.endswith("…") and len(tip) < 420
+
+
+def test_overview_thumbnail():
+    asset = lambda href, **kw: {"href": href, **kw}
+    view = lambda assets: core.CollectionView({"id": "x", "assets": assets}, None)
+    assert core._col_thumb(view({"data": asset("https://x.org/a.tif"), "tn": asset("https://x.org/t.png")})) == "https://x.org/t.png"
+    assert core._col_thumb(view({"p": asset("https://x.org/p.jpg?sig=1"),
+                                 "t": asset("https://x.org/t", type="image/png", roles=["thumbnail"])})) == "https://x.org/t"
+    assert core._col_thumb(view({"t": asset("./local.png")})) is None and core._col_thumb(view({})) is None
+    col = make_collection("alpha")
+    col.add_asset("thumbnail", pystac.Asset("https://x.org/alpha.png", media_type="image/png", roles=["thumbnail"]))
+    h = core.Collections(None, [col])._repr_html_()
+    assert "data-img='https://x.org/alpha.png'" in h
