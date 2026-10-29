@@ -1,7 +1,7 @@
 import marimo
 
 __generated_with = "0.25.2"
-app = marimo.App()
+app = marimo.App(width="medium")
 
 
 @app.cell
@@ -143,7 +143,7 @@ def _(mosaic):
         .to_array(dim="band")
         .pipe(lambda x: x / 15000)
         .where(lambda x: x > 0.01)
-        .plot.imshow(size=10, vmin=0.03, vmax=0.2)
+        .plot.imshow(size=5, vmin=0.03, vmax=0.2)
     )
     _img.axes
     return

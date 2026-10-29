@@ -122,16 +122,18 @@ _LEAFLET_JS = (f"const TILE = {json.dumps(_TILE)}, TILE_ATTR = {json.dumps(_TILE
                + _DARK_JS + """
 const LEAF = "https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/";
 const tok = (el, n, d) => getComputedStyle(el).getPropertyValue(n).trim() || d;  // theme token as a concrete colour
-async function leaflet() {  // CSS link once per page; dynamic import avoids RequireJS clashes
-  if (!document.getElementById("stacmap-css")) {
+async function leaflet(el) {  // CSS once per page (or shadow root, e.g. marimo); dynamic import avoids RequireJS clashes
+  const root = el.getRootNode(), shadow = root instanceof ShadowRoot, at = shadow ? root : document.head;
+  const has = id => (shadow ? root : document).getElementById(id);
+  if (!has("stacmap-css")) {
     const l = document.createElement("link");
     l.id = "stacmap-css"; l.rel = "stylesheet"; l.href = LEAF + "leaflet.css";
-    await new Promise(r => { l.onload = l.onerror = r; document.head.append(l); });
+    await new Promise(r => { l.onload = l.onerror = r; at.append(l); });
   }
-  if (!document.getElementById("stacmap-style")) {
+  if (!has("stacmap-style")) {
     const st = document.createElement("style");
     st.id = "stacmap-style"; st.textContent = LEAF_CSS;
-    document.head.append(st);
+    at.append(st);
   }
   return import(LEAF + "leaflet-src.esm.js");
 }
@@ -154,7 +156,7 @@ _MAP_JS = """
 const el = document.getElementById(id), fallback = el.innerHTML;
 let map, ro;
 try {
-  const L = await leaflet();
+  const L = await leaflet(el);
   el.innerHTML = "";
   map = basemap(L, el);
   const tip = s => { const d = document.createElement("div"); d.textContent = s; return d; };  // no innerHTML
@@ -377,7 +379,7 @@ async function render({ model, el }) {
   model.on("change:filter_options", buildSels);
   buildSels();
 
-  const L = await leaflet();
+  const L = await leaflet(el);
   map = basemap(L, mapEl);
   const ACC = tok(mapEl, "--sv-accent", "#1976d2");
   const none = { interactive: false }, style = { ...none, color: ACC, weight: 1, fillColor: ACC, fillOpacity: 0.3 };
