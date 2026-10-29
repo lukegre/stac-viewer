@@ -15,7 +15,8 @@ Usage (Jupyter / JupyterLab / VS Code / Colab)::
     browse(url, modifier=planetary_computer.sign_inplace)  # extra kwargs go to pystac_client.Client.open
     browse(url, refresh=True)             # ignore the collection cache (refreshed anyway after 5 days)
 
-Dependencies: pystac, pystac-client; anywidget (optional, only for ``selector()``).
+Dependencies: pystac, pystac-client; anywidget (optional, only for ``selector()``); ``open()`` backends are
+optional extras (odc-stac, xpystac, h5netcdf, geopandas; see ``openers``).
 """
 from __future__ import annotations
 
@@ -41,6 +42,8 @@ from pystac_client._utils import call_modifier
 from pystac_client.collection_client import CollectionClient
 from pystac_client.conformance import ConformanceClasses
 from pystac_client.exceptions import APIError
+
+from .openers import open_assets
 
 try:  # optional: interactive selector
     import anywidget
@@ -873,6 +876,13 @@ class Items(pystac.ItemCollection):
     def __repr__(self) -> str:
         return f"<Items n={len(self.items)}>"
 
+    def open(self, assets=None, *, opener: str | None = None, **kwargs):
+        """Open assets as an xarray Dataset or (Geo)DataFrame; default is all assets with role 'data'.
+
+        ``opener`` forces a registered opener by name; ``kwargs`` go to the backend.
+        """
+        return open_assets(list(self.items), assets, opener, **kwargs)
+
     def _repr_html_(self) -> str:
         items, n = self.items, len(self.items)
         spans = [_item_span(i) for i in items]
@@ -949,6 +959,10 @@ class CollectionView:
 
     def __repr__(self) -> str:
         return f"<Collection {self._id}>"
+
+    def open(self, assets=None, *, opener: str | None = None, **kwargs):
+        """Open collection-level assets (default: those with role 'data'); see ``Items.open``."""
+        return open_assets([self._col], assets, opener, **kwargs)
 
     # ---- viewer
     def _repr_html_(self) -> str:
