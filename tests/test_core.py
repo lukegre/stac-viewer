@@ -338,3 +338,58 @@ def test_corrupt_cache_refetches(saved, counted, cache_dir):
 def test_objects_not_cached(catalog, cache_dir):
     browse(catalog)
     assert not cache_dir.exists()
+
+# ---------------------------------------------------------------- lazy /collections parsing
+def test_api_collections_parsed_lazily(saved, monkeypatch):
+    seen = []
+    client = pystac_client.Client.open(saved, modifier=lambda obj: seen.append(obj.id))
+    pages = [{"collections": [make_collection("alpha").to_dict()]},
+             {"collections": [make_collection("beta-two").to_dict()]}]
+    monkeypatch.setattr(client, "_supports_collections", lambda: True)
+    monkeypatch.setattr(client, "_collections_href", lambda: "https://x.org/collections")
+    monkeypatch.setattr(client._stac_io, "get_pages", lambda url, **kw: iter(pages))
+    built = []
+    orig = core.CollectionClient.from_dict
+    monkeypatch.setattr(core.CollectionClient, "from_dict",
+                        lambda d, **kw: built.append(d["id"]) or orig(d, **kw))
+
+    cols = browse(client)
+    assert list(cols._by_attr) == ["alpha", "beta_two"]
+    assert "Beta-Two" in cols._repr_html_() and repr(cols.beta_two) == "<Collection beta-two>"
+    assert built == [] and seen == []  # listing, repr and overview parse nothing
+
+    assert cols.beta_two.description == "desc beta-two"
+    assert built == ["beta-two"] and seen == ["beta-two"]
+    cols.beta_two._repr_html_()
+    assert built == ["beta-two"]  # parsed once, then cached
+
+
+@pytest.mark.parametrize("rejects_limit", [False, True])
+def test_collection_pages_ask_for_large_pages(saved, monkeypatch, rejects_limit):
+    client = pystac_client.Client.open(saved)
+    monkeypatch.setattr(client, "_collections_href", lambda: "https://x.org/collections")
+    calls = []
+
+    def get_pages(url, parameters=None):
+        calls.append(parameters)
+        if parameters and rejects_limit:
+            raise pystac_client.exceptions.APIError("limit too large")
+        yield {"collections": [{"id": "a"}]}
+        yield {"collections": [{"id": "b"}]}
+
+    monkeypatch.setattr(client._stac_io, "get_pages", get_pages)
+    pages = list(core._collection_pages(client))
+    assert [c["id"] for p in pages for c in p["collections"]] == ["a", "b"]
+    assert calls == ([{"limit": core._PAGE_LIMIT}, None] if rejects_limit else [{"limit": core._PAGE_LIMIT}])
+
+
+def test_api_collections_cached_raw(saved, monkeypatch, cache_dir):
+    client = pystac_client.Client.open(saved)
+    monkeypatch.setattr(client, "_supports_collections", lambda: True)
+    monkeypatch.setattr(client, "_collections_href", lambda: "https://x.org/collections")
+    monkeypatch.setattr(client._stac_io, "get_pages",
+                        lambda url, **kw: iter([{"collections": [make_collection("alpha").to_dict()]}]))
+    core._cached_collections("api", client)
+    cols = core.Collections(client, core._cached_collections("api", client))
+    assert isinstance(cols.alpha._raw, dict)  # read back unparsed from the cache
+    assert cols.alpha.description == "desc alpha"
