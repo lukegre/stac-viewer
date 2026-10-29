@@ -1,4 +1,5 @@
 import datetime as dt
+import json
 
 import pystac
 import pystac_client
@@ -406,3 +407,31 @@ def test_api_collections_cached_raw(saved, monkeypatch, cache_dir):
     cols = core.Collections(client, core._cached_collections("api", client))
     assert isinstance(cols.alpha._raw, dict)  # read back unparsed from the cache
     assert cols.alpha.description == "desc alpha"
+
+
+def _script(h):
+    return h.split("<script>", 1)[1].rsplit("</script>", 1)[0]
+
+
+def test_items_card_is_item_browser():
+    a, b, c = (make_item(x, (0, 0, 1, 1), D(2020), **{"eo:cloud_cover": 5.0}) for x in "abc")
+    a.add_asset("t", pystac.Asset("https://x.org/a.png", media_type="image/png", roles=["thumbnail"]))
+    b.add_asset("thumbnail", pystac.Asset("s3://bucket/b.png", media_type="image/png"))
+    c.add_asset("rendered_preview", pystac.Asset("https://x.org/c.tif", media_type="image/tiff"))
+    h = Items([a, b, c])._repr_html_()
+    assert all(f"data-i='{i}'" in h for i in range(3)) and "data-i='3'" not in h
+    feats = json.loads(_script(h).split("data=", 1)[1].split(";", 1)[0])["features"]
+    assert [f["properties"].get("thumb") for f in feats] == ["https://x.org/a.png", None, None]
+    assert feats[0]["properties"]["props"]["cloud cover"] == "5%" and "<details" not in h
+
+
+def test_items_card_item_data_cannot_break_out():
+    it = make_item("<img src=x onerror=alert(1)></script>", (0, 0, 1, 1), D(2020), platform="</script><script>x")
+    it.add_asset("thumbnail", pystac.Asset("javascript:alert(1)", media_type="image/png"))
+    h = Items([it])._repr_html_()
+    assert h.count("</script>") == 1 and "<img src=x" not in h.replace(_script(h), "") and "javascript:" not in h
+
+
+def test_collection_card_still_renders_map():
+    h = core.CollectionView(make_collection("x"), None)._repr_html_()
+    assert 'id="stacmap-' in h and "<tr data-i" not in h

@@ -178,6 +178,10 @@ _CSS = """<style>
 .sc .bar{position:relative;height:8px;background:rgba(128,128,128,.25);border-radius:4px;margin:6px 0 2px}
 .sc .bar>div{position:absolute;top:0;bottom:0;background:#3b82f6;border-radius:4px}
 .sc .nw{white-space:nowrap}
+.sc .il{max-height:260px;overflow:auto}.sc .il th{position:sticky;top:0;background:Canvas;text-align:left;font-weight:600}
+.sc .il tr[data-i]{cursor:pointer}.sc .il tr.hov,.sc .il tr.selected{background:rgba(59,130,246,.15)}
+.sc .il tr.selected{font-weight:600}
+.sc .pop img{display:block;max-width:240px;max-height:200px;margin-top:4px}
 .sc .tk{display:flex;justify-content:space-between;font-size:11px;opacity:.6}
 </style>"""
 
@@ -311,9 +315,31 @@ try {
       L.rectangle([[b[1], a], [b[3], c]], { ...style, fillOpacity: i ? 0.2 : 0.35 })
         .bindTooltip(tip("[" + b.map(v => v.toFixed(2)).join(", ") + "]")).addTo(group);
   });
-  if (data.features)
-    L.geoJSON(data.features, { style: { ...style, fillOpacity: 0.25 },
-      onEachFeature: (f, l) => l.bindTooltip(tip(f.properties.t)) }).addTo(group);
+  if (data.features) {
+    const base = { ...style, fillOpacity: 0.25 }, hl = { color: "#f97316", weight: 2, fillOpacity: 0.45 };
+    const layers = [], rows = {}, http = u => /^https?:\\/\\//i.test(u || "");
+    (el.closest(".sc") || document).querySelectorAll("tr[data-i]").forEach(r => rows[r.dataset.i] = r);  // list rows, if any
+    const row = (i, c, on) => rows[i] && rows[i].classList.toggle(c, on);
+    const hover = (i, on) => { layers[i].setStyle(on ? hl : base); if (on) layers[i].bringToFront(); row(i, "hov", on); };
+    let sel;
+    const open = i => {
+      const p = layers[i].feature.properties, d = document.createElement("div"), add = (t, s) => {
+        const e = document.createElement(t); e.textContent = s; d.appendChild(e); return e; };
+      d.className = "pop"; add("b", p.id); add("div", p.when);
+      for (const [k, v] of Object.entries(p.props || {})) add("div", k + ": " + v);
+      if (http(p.href)) { const a = add("a", "item JSON"); a.href = p.href; a.target = "_blank"; a.rel = "noopener"; }
+      if (http(p.thumb)) { const m = document.createElement("img"); m.src = p.thumb; m.alt = p.id; d.appendChild(m); }
+      if (sel != null) row(sel, "selected", false);
+      sel = i; row(i, "selected", true);
+      L.popup({ maxWidth: 280 }).setLatLng(layers[i].getBounds().getCenter()).setContent(d).openOn(map);
+    };
+    map.on("popupclose", () => { if (sel != null) row(sel, "selected", false); sel = null; });
+    L.geoJSON(data.features, { style: base, onEachFeature: (f, l) => {
+      const i = f.properties.i; layers[i] = l;
+      l.bindTooltip(tip(f.properties.t)).on({ mouseover: () => hover(i, true), mouseout: () => hover(i, false), click: () => open(i) });
+      if (rows[i]) rows[i].onmouseenter = () => hover(i, true), rows[i].onmouseleave = () => hover(i, false), rows[i].onclick = () => open(i);
+    } }).addTo(group);
+  }
   const world = bboxes.some(b => b[2] - b[0] >= 350 && b[3] - b[1] >= 170);
   let fitted = false;
   const fit = () => { map.fitBounds(world ? [[-90, -180], [90, 180]] : group.getBounds(), { padding: [12, 12] }); fitted = true; };
@@ -326,6 +352,21 @@ try {
   el.innerHTML = fallback; el.style.height = "";
 }
 """
+
+
+_POP_PROPS = ("platform", "constellation", "gsd", "proj:epsg", "sat:orbit_state")
+
+
+def _is_http(u: str) -> bool:
+    return u.lower().startswith(("http://", "https://"))
+
+
+def _thumb(item: pystac.Item) -> str | None:
+    """Thumbnail URL: first asset with role 'thumbnail', else a well-known key; http(s) and not a TIFF."""
+    a = next((a for a in item.assets.values() if "thumbnail" in (a.roles or [])), None)
+    a = a or next((item.assets[k] for k in ("thumbnail", "rendered_preview", "preview") if k in item.assets), None)
+    if a and _is_http(a.href) and (a.media_type or "image/png") in ("image/png", "image/jpeg", "image/webp", "image/gif"):
+        return a.href
 
 
 def _json(x) -> str:
@@ -516,21 +557,30 @@ class Items(pystac.ItemCollection):
         rng = f"<div class='m'>{_day(min(los))} to {_day(max(his))}</div>" if los else ""
         bboxes = [i.bbox for i in items[:500] if i.bbox]
         when = lambda i, lo, hi: _day(lo) if i.datetime else f"{_day(lo)} to {_day(hi)}"
-        feats = [
-            {"type": "Feature", "geometry": i.geometry, "properties": {"t": f"{i.id} \u00b7 {when(i, lo, hi)}"}}
-            for i, (lo, hi) in zip(items[:500], spans) if i.geometry
-        ]
-        rows = ""
-        for i, (lo, hi) in zip(items[:20], spans):
-            cc = i.properties.get("eo:cloud_cover")
+        feats, rows = [], ""
+        for k, (i, (lo, hi)) in enumerate(zip(items[:500], spans)):
+            if not i.geometry:
+                continue
+            w, cc = when(i, lo, hi), i.properties.get("eo:cloud_cover")
+            props = {k_: i.properties[k_] for k_ in _POP_PROPS if i.properties.get(k_) is not None}
+            if cc is not None:
+                props["cloud cover"] = f"{cc:.0f}%"
+            href = i.get_self_href()
+            f = {"i": k, "t": f"{i.id} \u00b7 {w}", "id": i.id, "when": w, "props": props}
+            if href and _is_http(href):
+                f["href"] = href
+            if thumb := _thumb(i):
+                f["thumb"] = thumb
+            feats.append({"type": "Feature", "geometry": i.geometry, "properties": f})
             rows += (
-                f"<tr><td>{html.escape(i.id)}</td><td class='m nw'>{when(i, lo, hi)}</td>"
+                f"<tr data-i='{k}'><td>{html.escape(i.id)}</td><td class='m nw'>{w}</td>"
                 f"<td class='m nw'>{'' if cc is None else f'{cc:.0f}% cloud'}</td></tr>"
             )
+        mp = _map_html({"features": feats}, _svg_map(bboxes, view=_items_view(bboxes))) if feats or bboxes else ""
+        lst = f"<div class='il'><table><tr><th>id</th><th>date</th><th>cloud</th></tr>{rows}</table></div>" if rows else ""
         return (
             f"{_CSS}<div class='sc'><h4>{n} items{note}</h4>{rng}"
-            f"<div style='margin-top:8px'>{_map_html({'features': feats}, _svg_map(bboxes, view=_items_view(bboxes))) if feats or bboxes else ''}</div>"
-            f"<details><summary>First {min(n, 20)} items</summary><table>{rows}</table></details></div>"
+            f"<div class='row'><div class='mp'>{mp}</div><div class='info'>{lst}</div></div></div>"
         )
 
 
