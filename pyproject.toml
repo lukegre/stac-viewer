@@ -8,6 +8,7 @@ authors = [
 ]
 requires-python = ">=3.10"
 dependencies = [
+    "odc-stac>=0.5.3",
     "pystac>=1.10",
     "pystac-client>=0.8",
 ]
