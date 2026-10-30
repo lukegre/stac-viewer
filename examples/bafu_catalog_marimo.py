@@ -31,16 +31,17 @@ def _(mo):
     mo.md(r"""
     ## Open the catalog
 
-    `browse()` takes the API URL; the trailing `/collections` is stripped automatically. The catalog view lists all collections and is scrollable.
+    `browse()` takes the API URL; the trailing `/collections` is stripped automatically. The catalog view lists all collections and is scrollable. `picker()` shows the same view as a widget: clicking a row makes that collection the active one for the cells below.
     """)
     return
 
 
 @app.cell(hide_code=True)
-def _(browse):
+def _(browse, mo):
     bafu = browse("https://data.geo.admin.ch/api/stac/v1/")
-    bafu
-    return (bafu,)
+    picker = mo.ui.anywidget(bafu.picker("ch.bafu.trockenheitswarnkarte"))
+    picker
+    return (picker,)
 
 
 @app.cell(hide_code=True)
@@ -54,8 +55,8 @@ def _(mo):
 
 
 @app.cell
-def _(bafu):
-    collection = bafu.ch_bafu_trockenheitswarnkarte
+def _(picker):
+    collection = picker.widget.collection
     collection
     return (collection,)
 
