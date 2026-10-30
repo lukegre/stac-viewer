@@ -101,6 +101,27 @@ def test_filegdb_zip(tmp_path):
     assert spec["kind"] == "choice" and spec["choices"] == ["meta", "pts", "one"] and spec["default"] == "pts"
 
 
+def test_shapefile_zip(tmp_path):
+    gpd = pytest.importorskip("geopandas")
+    pytest.importorskip("pyogrio")
+    import shutil
+    from shapely.geometry import Point
+
+    g = gpd.GeoDataFrame({"a": [1.0, 2.0]}, geometry=[Point(0, 0), Point(1, 1)], crs=4326)
+    (tmp_path / "shp").mkdir()
+    g.to_file(tmp_path / "shp" / "pts.shp")
+    g.iloc[:1].to_file(tmp_path / "shp" / "one.shp")
+    shutil.make_archive(str(tmp_path / "t.shp"), "zip", root_dir=tmp_path / "shp")
+    by_ext = item_with("g", D(2020), d=(str(tmp_path / "t.shp.zip"), "application/zip"))
+    by_type = item_with("h", D(2021), d=(str(tmp_path / "t.shp.zip"), "application/x.shapefile+zip"))
+    assert openers.resolve([by_ext], "d")[0] == openers.resolve([by_type], "d")[0] == "shapefile"
+    df = Items([by_type]).open(layer="one")
+    assert isinstance(df, gpd.GeoDataFrame) and len(df) == 1 and df.crs.to_epsg() == 4326
+    assert len(Items([by_ext, by_type]).open(layer="pts")) == 4
+    spec = openers.opener_params("shapefile", [by_ext], ["d"])["layer"]
+    assert sorted(spec["choices"]) == ["one", "pts"] and spec["default"] in ("one", "pts")
+
+
 def test_gpkg(tmp_path):
     gpd = pytest.importorskip("geopandas")
     pytest.importorskip("pyogrio")

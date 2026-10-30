@@ -356,6 +356,12 @@ def _gdb_default_layer(items, assets):
     extensions=[".gdb.zip"],
     params={"layer": Param(lambda i, a: [n for n, _ in _gdb_layers(i, a)], _gdb_default_layer)},
 )
+@register_opener(
+    "shapefile",
+    media_types=["application/x.shapefile+zip"],  # used by data.geo.admin.ch
+    extensions=[".shp.zip"],
+    params={"layer": Param(lambda i, a: [n for n, _ in _gdb_layers(i, a)], _gdb_default_layer)},  # one per .shp
+)
 def _open_filegdb(items, assets, **kwargs):
     gpd = _need("geopandas", "gdb")
     pd = _need("pandas", "gdb")
