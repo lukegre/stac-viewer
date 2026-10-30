@@ -4,7 +4,7 @@ __generated_with = "0.25.2"
 app = marimo.App(width="medium", css_file="full_height.css")
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _():
     import marimo as mo
     from xyzservices import providers as xyz
@@ -21,17 +21,7 @@ def _(mo):
 
     The Swiss Federal Geoportal (data.geo.admin.ch) publishes its datasets, including those from the Federal Office for the Environment (BAFU), through a public STAC API. No signing or authentication is needed, so assets can be read directly.
 
-    This notebook opens the catalog, picks a forest climate layer and loads it as an `xarray` dataset.
-    """)
-    return
-
-
-@app.cell(hide_code=True)
-def _(mo):
-    mo.md(r"""
-    ## Open the catalog
-
-    `browse()` takes the API URL; the trailing `/collections` is stripped automatically. The catalog view lists all collections and is scrollable. `picker()` shows the same view as a widget: clicking a row makes that collection the active one for the cells below.
+    Click on the entries below to load a STAC collection. Note that not all formats are supported at the moment
     """)
     return
 
@@ -44,21 +34,18 @@ def _(browse, mo):
     return (picker,)
 
 
-@app.cell(hide_code=True)
-def _(mo):
-    mo.md(r"""
-    ## Look at a collection
-
-    Collection ids like `ch.bafu.wald-lufttemperatur_juli_1981_2010` contain dots and dashes, so they are turned into valid Python identifiers for dot access. Bracket access with the original id works too. This collection holds the mean July air temperature in Swiss forests for 1981–2010.
-    """)
-    return
-
-
 @app.cell
 def _(picker):
     collection = picker.widget.collection
     collection
     return (collection,)
+
+
+@app.cell
+def _(collection):
+    sel = collection.selector()
+    sel
+    return (sel,)
 
 
 @app.cell(hide_code=True)
@@ -72,8 +59,8 @@ def _(mo):
 
 
 @app.cell
-def _(collection):
-    items = collection.search()
+def _(collection, sel):
+    items = collection.search(sel)
     items
     return (items,)
 
@@ -114,11 +101,16 @@ def _(mo):
 
 
 @app.cell
+def _(out):
+    out["fokuskarte-voegel_2056.tif"].squeeze().plot.imshow()
+    return
+
+
+@app.cell
 def _(out, xyz):
     out.explore(
         tiles=xyz.SwissFederalGeoportal.NationalMapGrey,
-        cmap="YlOrRd", 
-        column="warnlevel"
+        cmap="Spectral_r", 
     )
     return
 
