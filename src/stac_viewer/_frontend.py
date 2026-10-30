@@ -93,6 +93,8 @@ _CSS = "<style>" + _ROOT + """
 .sc .cp{display:inline-flex;vertical-align:middle;margin-left:6px;padding:2px;border:0;border-radius:3px;background:none;color:var(--sv-muted);cursor:pointer;opacity:0}
 .sc .cp svg{width:13px;height:13px}.sc .cp[hidden]{display:none}.sc .cp:hover{color:var(--sv-accent);background:var(--sv-alt)}
 .sc tr:hover .cp,.sc .cp:focus-visible,.sc .cp.ok{opacity:1}.sc .cp.ok{color:var(--sv-accent)}
+.sc.pick tr[data-k]{cursor:pointer}.sc.pick tr[data-k]:hover td{background:var(--sv-alt)}
+.sc .ov tr.sel td{background:color-mix(in srgb,var(--sv-accent) 16%,transparent)}.sc .ov tr.sel td.ti{font-weight:600}
 </style>"""
 
 
@@ -618,8 +620,8 @@ button.stacsel-gh{cursor:pointer}button.stacsel-gh:hover{color:var(--sv-accent);
 
 # ------------------------------------------------------ collection overview filter
 # rows whose data-q contains every whitespace-separated term stay visible
-_FILTER_JS = """
-const el = document.getElementById(id), box = el.querySelector(".q"), inp = box.querySelector("input");
+_FILTER_JS = """  // needs `el` (the .sc card) and CHECK in scope
+const box = el.querySelector(".q"), inp = box.querySelector("input");
 const count = box.querySelector("span"), rows = [...el.querySelectorAll("tr[data-q]")];
 box.hidden = false;
 inp.oninput = () => {
@@ -679,4 +681,22 @@ for (const r of rows) {
   r.onmousemove = place;
   r.onmouseleave = () => { tip.hidden = true; };
 }
+"""
+
+# catalog overview as a widget: clicking a row sets `selected` (the collection's attribute name)
+_PICK_ESM = f"const CHECK = {json.dumps(_CHECK_SVG)};" + """
+function render({ model, el: host }) {
+  host.innerHTML = model.get("html");
+  const el = host.querySelector(".sc");
+  el.classList.add("pick");
+""" + _FILTER_JS + """
+  const mark = () => { for (const r of rows) r.classList.toggle("sel", r.dataset.k === model.get("selected")); };
+  for (const r of rows) r.onclick = e => {
+    if (e.target.closest(".cp")) return;
+    model.set("selected", r.dataset.k); model.save_changes();
+  };
+  model.on("change:selected", mark); mark();
+  return () => model.off("change:selected", mark);
+}
+export default { render };
 """

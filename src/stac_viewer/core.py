@@ -48,7 +48,7 @@ from pystac_client.exceptions import APIError
 
 from . import openers as _openers
 from ._frontend import (_CHECK_SVG, _COPY_SVG, _CSS, _ESM, _FILTER_JS, _LEAFLET_JS, _MAP_JS, _OPEN_ESM,
-                        _SEARCH_SVG, _WIDGET_CSS)
+                        _PICK_ESM, _SEARCH_SVG, _WIDGET_CSS)
 from .openers import open_assets
 
 
@@ -815,7 +815,7 @@ class Collections:
     def __repr__(self) -> str:
         return "\n".join(f"{k}: {v._title or ''}" for k, v in self._by_attr.items())
 
-    def _repr_html_(self) -> str:
+    def _overview_html(self, uid: str) -> str:
         cat, n = self._catalog, len(self._by_attr)
         title = getattr(cat, "title", None) or getattr(cat, "id", None) or "STAC catalog"
         href = cat.get_self_href() if hasattr(cat, "get_self_href") else None
@@ -825,20 +825,52 @@ class Collections:
             head["url"] = href
         img = lambda v: f" data-img='{html.escape(u)}'" if (u := _col_thumb(v)) else ""
         rows = "".join(
-            f"<tr data-q='{html.escape(_search_text(k, v).lower())}' title='{html.escape(_tooltip(v))}'{img(v)}>"
+            f"<tr data-k='{html.escape(k)}' data-q='{html.escape(_search_text(k, v).lower())}' title='{html.escape(_tooltip(v))}'{img(v)}>"
             f"<td class='ti'>{html.escape(v._title or '')}</td><td class='id'>{html.escape(k)}"
             f"<button type='button' class='cp' data-id='{html.escape(k)}' aria-label='Copy id' hidden>{_COPY_SVG}</button></td></tr>"
             for k, v in self._by_attr.items()
         )
-        uid = f"stacq-{uuid.uuid4().hex}"
         return (
-            f"{_head()}<div class='sc' id='{uid}'><div class='hd'><span class='ty'>{'STAC API' if api else 'STAC catalog'}</span>"
+            f"<div class='sc' id='{uid}'><div class='hd'><span class='ty'>{'STAC API' if api else 'STAC catalog'}</span>"
             f"<span class='tt'>{html.escape(title)}</span><span class='mt'>{n} collections</span></div>"
             f"{_desc_html(getattr(cat, 'description', None))}<div style='margin-top:10px'>{_table(head)}</div>"
             f"<div class='q' hidden>{_SEARCH_SVG}<input type='search' placeholder='Filter by title, id, keyword or description'>"
             f"<span class='m'></span></div><div class='il ovl'><table class='tb ov'><tbody>{rows}</tbody></table></div></div>"
-            f"<script>(()=>{{const id={_json(uid)},CHECK={_json(_CHECK_SVG)};{_FILTER_JS}}})()</script>"
         )
+
+    def _repr_html_(self) -> str:
+        uid = f"stacq-{uuid.uuid4().hex}"
+        return (
+            f"{_head()}{self._overview_html(uid)}"
+            f"<script>(()=>{{const el=document.getElementById({_json(uid)}),CHECK={_json(_CHECK_SVG)};{_FILTER_JS}}})()</script>"
+        )
+
+    def picker(self, selected: str | None = None) -> "CollectionPicker":
+        """Return the overview as a widget: clicking a row selects that collection (``picker.collection``).
+
+        ``selected`` is the initial collection, by attribute name or STAC id.
+        """
+        if selected in self._by_id:
+            selected = next(k for k, v in self._by_attr.items() if v is self._by_id[selected])
+        elif selected is not None and selected not in self._by_attr:
+            raise KeyError(f"no collection '{selected}'")
+        return CollectionPicker(self, selected or "")
+
+
+class CollectionPicker(anywidget.AnyWidget):
+    """Catalog overview whose clicked row becomes ``selected``; ``collection`` is that ``CollectionView``."""
+
+    _esm = _PICK_ESM
+    html = traitlets.Unicode("").tag(sync=True)
+    selected = traitlets.Unicode("").tag(sync=True)  # attribute name of the clicked collection
+
+    def __init__(self, collections: Collections, selected: str = ""):
+        self._collections = collections
+        super().__init__(html=_CSS + collections._overview_html(f"stacq-{uuid.uuid4().hex}"), selected=selected)
+
+    @property
+    def collection(self) -> CollectionView | None:
+        return self._collections._by_attr.get(self.selected)
 
 
 def browse(source: Any, *, refresh: bool = False, **client_kwargs) -> Collections:
