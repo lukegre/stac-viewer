@@ -107,10 +107,19 @@ def _(out):
 
 
 @app.cell
-def _(out, xyz):
+def _(mo, out):
+    _cols = [c for c in out.columns if c != out.geometry.name]
+    column = mo.ui.dropdown(_cols, value=_cols[0] if _cols else None, label="column")
+    column
+    return (column,)
+
+
+@app.cell
+def _(column, out, xyz):
     out.explore(
+        column=column.value,
         tiles=xyz.SwissFederalGeoportal.NationalMapGrey,
-        cmap="Spectral_r", 
+        cmap="Spectral_r",
     )
     return
 
